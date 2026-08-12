@@ -5,6 +5,8 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temp=$(mktemp -d)
 trap 'rm -rf "$temp"' EXIT HUP INT TERM
 
+real_python=$(command -v python3)
+export REAL_PYTHON=$real_python
 fake_python="$temp/python3"
 cat >"$fake_python" <<'EOF'
 #!/bin/sh
@@ -14,7 +16,7 @@ fi
 if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then
     exit 0
 fi
-exec python3 "$@"
+exec "$REAL_PYTHON" "$@"
 EOF
 chmod +x "$fake_python"
 
