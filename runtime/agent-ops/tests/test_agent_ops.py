@@ -16,7 +16,10 @@ from pathlib import Path
 import sys
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-BIN_DIR = Path(os.environ.get("AGENT_OPS_BIN_DIR", Path.home() / ".local" / "bin"))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BIN_DIR = Path(os.environ.get("AGENT_OPS_BIN_DIR", REPO_ROOT / "bin"))
+os.environ.setdefault("XDG_DATA_HOME", str(REPO_ROOT / "runtime"))
+os.environ.setdefault("LYSTAR_SKILL_AUTO_UPDATE", "0")
 sys.path.insert(0, str(SCRIPTS))
 
 import config_store
