@@ -1,0 +1,33 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify version
+        run: test "v$(cat VERSION)" = "$GITHUB_REF_NAME"
+      - name: Install dependencies
+        run: python -m pip install -r requirements/all.txt
+      - name: Test
+        run: |
+          python -m unittest discover runtime/agent-ops/tests
+          sh tests/test_install.sh
+          sh tests/test_packages.sh
+          sh tests/test_update.sh
+      - name: Build release assets
+        run: ./scripts/build-packages.sh
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag

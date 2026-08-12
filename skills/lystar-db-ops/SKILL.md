@@ -1,0 +1,59 @@
+---
+name: lystar-db-ops
+description: 发现、选择、创建和使用 MySQL、MariaDB、PostgreSQL 数据源，执行查询、SQL、导入导出或核验真实数据库时使用。
+---
+
+# LYStar DB Ops
+
+统一使用 PATH 中的 `dbx`。当前目录默认作为项目根目录，不同 Agent Harness 共用全局数据库 profile 与项目默认选择。
+
+每次加载本 Skill，先执行下面命令；它每 24 小时最多联网一次，失败不阻断当前任务：
+
+```bash
+lystar-skill-update auto lystar-db-ops --quiet || true
+```
+
+`dbx` 启动时也会执行同样的检查。手工检查或更新：
+
+```bash
+lystar-skill-update check lystar-db-ops
+lystar-skill-update update lystar-db-ops
+```
+
+## 数据源
+
+```bash
+dbx sources
+dbx use <别名|profile|发现来源>
+dbx use --clear
+dbx source add <别名> --type <mysql|mariadb|postgresql> --host <host> --port <port> --database <库名> --user <用户> --password <密码>
+dbx source add <别名> --url "<数据库URL>"
+dbx source list
+dbx source show <别名|profile>
+dbx source remove <别名|profile>
+```
+
+同一 `engine + host + port + database + user` 只保存一个 profile，多个别名可以复用。自动发现的数据源会写入全局配置，项目保存发现来源绑定和默认 profile。
+
+## 操作
+
+```bash
+dbx query "<只读SQL>"
+dbx query --source <数据源> "<只读SQL>"
+dbx query --json "<需要脚本解析或严格类型的只读SQL>"
+dbx exec "<DDL或DML>"
+dbx import <SQL文件>
+dbx export <输出文件>
+dbx last [--summary|--json|--clear]
+```
+
+当前项目发现一个数据源时直接使用；发现多个且没有默认值时，先执行 `dbx sources`，再执行一次 `dbx use`。禁止静默选择第一个数据源。
+
+## 规则
+
+- 查询成功默认输出 CSV；需要脚本解析或严格类型时使用 `--json`。
+- 用户问上次结果时，当前上下文有完整结果就直接使用；缺少细节时调用 `last --summary`，确需正文再调用 `last`。
+- `query` 用于只读查询，默认返回 20 行；需要精确总数时单独执行 `COUNT(*)`。
+- `exec`、`import` 和数据库写入必须来自用户明确要求；执行后使用 `query` 回查。
+- 删除、批量更新、资金、权限和历史数据修正先说明影响与回滚方式，再执行。
+- 结果区分只读查询、SQL 编写、SQL 审查和已实际执行，未执行不能宣称已落库。

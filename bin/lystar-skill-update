@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
+exec "${PYTHON_BIN:-python3}" "$data_home/agent-ops/scripts/skill_update.py" "$@"
