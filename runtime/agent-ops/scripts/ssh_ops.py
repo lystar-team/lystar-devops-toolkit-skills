@@ -9,6 +9,7 @@ import io
 import json
 import os
 import posixpath
+import re
 import shlex
 import signal
 import socket
@@ -37,9 +38,15 @@ DEFAULT_PORT = 22
 DEFAULT_TIMEOUT = 120
 COMMANDS = {
     "open", "status", "close", "forget", "reap", "exec", "run", "job",
-    "wait", "put", "get", "ls", "cat", "last", "daemon",
+    "jobs", "cancel", "wait", "put", "get", "ls", "cat", "last", "daemon",
+    "forward",
 }
-CACHE_ACTIONS = {"exec", "run", "job", "wait", "put", "get", "ls", "cat"}
+CACHE_ACTIONS = {
+    "exec", "run", "job", "jobs", "cancel", "wait", "put", "get", "ls", "cat",
+    "forward",
+}
+JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+FORWARD_CHUNK_BYTES = 64 * 1024
 
 
 def ensure_dirs() -> None:
@@ -388,6 +395,184 @@ def transport_connected(client: paramiko.SSHClient | None) -> bool:
     return bool(transport and transport.is_active() and transport.is_authenticated())
 
 
+def validate_job_id(job_id: str) -> str:
+    if not JOB_ID_RE.fullmatch(job_id):
+        raise ValueError("invalid job id")
+    return job_id
+
+
+class PortForward:
+    """A local TCP listener backed by the daemon's existing SSH transport."""
+
+    def __init__(
+        self,
+        daemon: "Daemon",
+        forward_id: str,
+        bind_host: str,
+        local_port: int,
+        remote_host: str,
+        remote_port: int,
+    ):
+        self.daemon = daemon
+        self.forward_id = forward_id
+        self.bind_host = bind_host
+        self.requested_local_port = local_port
+        self.remote_host = remote_host
+        self.remote_port = remote_port
+        self.listener: socket.socket | None = None
+        self.thread: threading.Thread | None = None
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.state = "created"
+        self.error = ""
+        self.created_at = utc_now()
+        self.closed_at = ""
+        self.active_connections = 0
+        self.last_error = ""
+
+    def start(self) -> None:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            listener.bind((self.bind_host, self.requested_local_port))
+            listener.listen(32)
+            listener.settimeout(0.5)
+        except Exception:
+            listener.close()
+            raise
+
+        self.listener = listener
+        self.state = "open"
+        self.thread = threading.Thread(
+            target=self._accept_loop,
+            name=f"sshx-forward-{self.forward_id}",
+            daemon=True,
+        )
+        self.thread.start()
+
+    def _accept_loop(self) -> None:
+        assert self.listener is not None
+        while not self.stop_event.is_set():
+            try:
+                client, address = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError as exc:
+                if not self.stop_event.is_set():
+                    self._set_error(str(exc))
+                break
+
+            with self.lock:
+                self.active_connections += 1
+            threading.Thread(
+                target=self._bridge,
+                args=(client, address),
+                name=f"sshx-forward-connection-{self.forward_id}",
+                daemon=True,
+            ).start()
+
+    def _set_error(self, message: str) -> None:
+        with self.lock:
+            self.last_error = message
+            if self.state == "open":
+                self.state = "error"
+                self.error = message
+
+    def _bridge(self, client: socket.socket, address: tuple[str, int]) -> None:
+        channel: paramiko.Channel | None = None
+        try:
+            transport = self.daemon.client.get_transport() if self.daemon.client else None
+            if not transport or not transport.is_active():
+                raise RuntimeError("SSH transport is unavailable")
+            channel = transport.open_channel(
+                "direct-tcpip",
+                (self.remote_host, self.remote_port),
+                address,
+                timeout=self.daemon.connection_timeout,
+            )
+            channel.settimeout(0.5)
+            client.settimeout(0.5)
+
+            def pump(source: Any, target: Any) -> None:
+                try:
+                    while not self.stop_event.is_set():
+                        try:
+                            data = source.recv(FORWARD_CHUNK_BYTES)
+                        except socket.timeout:
+                            continue
+                        except (OSError, EOFError, paramiko.SSHException):
+                            break
+                        if not data:
+                            break
+                        target.sendall(data)
+                except (OSError, EOFError, paramiko.SSHException):
+                    pass
+
+            upstream = threading.Thread(target=pump, args=(client, channel), daemon=True)
+            downstream = threading.Thread(target=pump, args=(channel, client), daemon=True)
+            upstream.start()
+            downstream.start()
+            upstream.join()
+            downstream.join(timeout=1)
+        except Exception as exc:
+            self._set_error(str(exc))
+        finally:
+            for resource in (channel, client):
+                if resource is None:
+                    continue
+                try:
+                    resource.close()
+                except (OSError, EOFError, paramiko.SSHException):
+                    pass
+            with self.lock:
+                self.active_connections = max(0, self.active_connections - 1)
+
+    def close(self) -> dict[str, Any]:
+        with self.lock:
+            was_open = self.state in {"open", "error"}
+            if self.state != "closed":
+                self.state = "closed"
+                self.closed_at = utc_now()
+            self.stop_event.set()
+            listener = self.listener
+            thread = self.thread
+        if listener is not None:
+            try:
+                listener.close()
+            except OSError:
+                pass
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1)
+        return {**self.snapshot(), "closed": was_open}
+
+    def snapshot(self) -> dict[str, Any]:
+        local_host = self.bind_host
+        local_port = self.requested_local_port
+        if self.listener is not None:
+            try:
+                local_host, local_port = self.listener.getsockname()[:2]
+            except OSError:
+                pass
+        result: dict[str, Any] = {
+            "forward_id": self.forward_id,
+            "state": self.state,
+            "bind_host": local_host,
+            "local_host": local_host,
+            "local_port": local_port,
+            "remote_host": self.remote_host,
+            "remote_port": self.remote_port,
+            "created_at": self.created_at,
+            "active_connections": self.active_connections,
+        }
+        if self.closed_at:
+            result["closed_at"] = self.closed_at
+        if self.error:
+            result["error"] = self.error
+        if self.last_error and self.last_error != self.error:
+            result["last_error"] = self.last_error
+        return result
+
+
 class BoundedOutput:
     def __init__(self, max_bytes: int):
         if max_bytes < 1:
@@ -603,24 +788,43 @@ def start_remote_job(
     command: str,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
+    created_at = utc_now()
     job_id = dt.datetime.now(dt.UTC).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
     job_dir = posixpath.join(remote_home(client, timeout), ".agent-ops", "jobs", job_id)
     with open_sftp_session(client, timeout) as sftp:
         sftp_mkdirs(sftp, job_dir)
         command_path = posixpath.join(job_dir, "command.sh")
         launcher_path = posixpath.join(job_dir, "launcher.sh")
+        metadata_path = posixpath.join(job_dir, "job.json")
         with sftp.open(command_path, "w") as handle:
             handle.write(command + "\n")
+        with sftp.open(metadata_path, "w") as handle:
+            handle.write(json.dumps({
+                "job_id": job_id,
+                "command": command,
+                "remote_dir": job_dir,
+                "stdout_log": posixpath.join(job_dir, "stdout.log"),
+                "stderr_log": posixpath.join(job_dir, "stderr.log"),
+                "created_at": created_at,
+            }, ensure_ascii=False) + "\n")
         with sftp.open(launcher_path, "w") as handle:
             handle.write(
                 """#!/bin/sh
 cd "$(dirname "$0")" || exit 127
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '{"state":"running","pid":%s,"started_at":"%s","updated_at":"%s"}\n' "$$" "$started" "$started" > status.json
+cancelled=0
+trap 'cancelled=1' TERM INT
 /bin/sh command.sh > stdout.log 2> stderr.log
 code=$?
 ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-printf '{"state":"finished","exit_code":%s,"pid":%s,"started_at":"%s","updated_at":"%s"}\n' "$code" "$$" "$started" "$ended" > status.json
+if [ "$cancelled" -eq 1 ] || [ -f cancel.requested ]; then
+    state=cancelled
+    code=143
+else
+    state=finished
+fi
+printf '{"state":"%s","exit_code":%s,"pid":%s,"started_at":"%s","ended_at":"%s","updated_at":"%s"}\n' "$state" "$code" "$$" "$started" "$ended" "$ended" > status.json
 exit "$code"
 """
             )
@@ -642,21 +846,35 @@ def remote_job_status(
     tail: int,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
+    validate_job_id(job_id)
     job_dir = posixpath.join(remote_home(client, timeout), ".agent-ops", "jobs", job_id)
     quoted_dir = shlex.quote(job_dir)
     command = (
-        f"cd {quoted_dir} && printf 'STATUS_JSON\\n'; cat status.json 2>/dev/null || true; "
+        f"cd {quoted_dir} 2>/dev/null || exit 44; "
+        f"printf 'META_JSON\\n'; cat job.json 2>/dev/null || true; "
+        f"printf '\\nSTATUS_JSON\\n'; cat status.json 2>/dev/null || true; "
         f"printf '\\nSTDOUT_TAIL\\n'; tail -n {int(tail)} stdout.log 2>/dev/null || true; "
         f"printf '\\nSTDERR_TAIL\\n'; tail -n {int(tail)} stderr.log 2>/dev/null || true"
     )
     reply = exec_command(client, command, timeout, 64_000)
+    if int(reply.get("exit_code", 0)) == 44:
+        return {
+            "job_id": job_id,
+            "status": {"state": "not_found"},
+            "error": "job not found",
+        }
     output = reply.get("stdout", "")
+    metadata_text = ""
     status_text = ""
     stdout_tail = ""
     stderr_tail = ""
-    if "STDOUT_TAIL\n" in output:
-        before_stdout, stdout_tail = output.split("STDOUT_TAIL\n", 1)
-        status_text = before_stdout.replace("STATUS_JSON\n", "", 1).strip()
+    if "META_JSON\n" in output and "\nSTATUS_JSON\n" in output:
+        metadata_text, status_text = output.split("\nSTATUS_JSON\n", 1)
+        metadata_text = metadata_text.replace("META_JSON\n", "", 1).strip()
+        if "\nSTDOUT_TAIL\n" in status_text:
+            status_text, stdout_tail = status_text.split("\nSTDOUT_TAIL\n", 1)
+    elif "STDOUT_TAIL\n" in output:
+        status_text, stdout_tail = output.split("STDOUT_TAIL\n", 1)
     if "\nSTDERR_TAIL\n" in stdout_tail:
         stdout_tail, stderr_tail = stdout_tail.split("\nSTDERR_TAIL\n", 1)
     try:
@@ -664,11 +882,174 @@ def remote_job_status(
     except json.JSONDecodeError:
         status_payload = {"state": "unknown", "raw": status_text}
     result: dict[str, Any] = {"job_id": job_id, "status": status_payload, "remote_dir": job_dir}
+    try:
+        metadata = json.loads(metadata_text) if metadata_text else {}
+    except json.JSONDecodeError:
+        metadata = {}
+    if isinstance(metadata, dict):
+        for key in ("command", "created_at", "stdout_log", "stderr_log"):
+            if metadata.get(key):
+                result[key] = metadata[key]
     if stdout_tail:
         result["stdout"] = stdout_tail
     if stderr_tail:
         result["stderr"] = stderr_tail
     return result
+
+
+def remote_log_delta(
+    client: paramiko.SSHClient,
+    job_dir: str,
+    log_name: str,
+    offset: int,
+    max_bytes: int,
+    timeout: int,
+) -> tuple[str, int, int, bool]:
+    if offset < 0:
+        raise ValueError("log offset must be non-negative")
+    if max_bytes < 1:
+        raise ValueError("log max bytes must be positive")
+    quoted_dir = shlex.quote(job_dir)
+    quoted_log = shlex.quote(log_name)
+    command = (
+        f"cd {quoted_dir} 2>/dev/null || exit 44; "
+        f"size=$(wc -c < {quoted_log} 2>/dev/null || printf 0); "
+        f"printf 'SIZE:%s\\n' \"$size\"; "
+        f"start={int(offset)}; "
+        f"[ \"$start\" -le \"$size\" ] || start=0; "
+        f"if [ \"$size\" -gt \"$start\" ]; then "
+        f"dd if={quoted_log} bs=1 skip=\"$start\" count={int(max_bytes)} 2>/dev/null; fi"
+    )
+    reply = exec_command(client, command, timeout, max_bytes + 128)
+    if int(reply.get("exit_code", 0)) == 44:
+        return "", offset, 0, False
+    output = str(reply.get("stdout", ""))
+    if not output.startswith("SIZE:"):
+        return "", offset, 0, False
+    header, data = output.split("\n", 1) if "\n" in output else (output, "")
+    try:
+        size = max(0, int(header.removeprefix("SIZE:")))
+    except ValueError:
+        return "", offset, 0, False
+    start = offset if offset <= size else 0
+    next_offset = min(size, start + max_bytes)
+    return data, next_offset, size, start != offset
+
+
+def remote_job_follow(
+    client: paramiko.SSHClient,
+    job_id: str,
+    stdout_offset: int,
+    stderr_offset: int,
+    timeout: int = DEFAULT_TIMEOUT,
+    max_bytes: int = FORWARD_CHUNK_BYTES,
+) -> dict[str, Any]:
+    status = remote_job_status(client, job_id, 0, timeout)
+    if status.get("error"):
+        return status
+    job_dir = str(status["remote_dir"])
+    stdout, next_stdout, stdout_size, stdout_reset = remote_log_delta(
+        client, job_dir, "stdout.log", stdout_offset, max_bytes, timeout
+    )
+    stderr, next_stderr, stderr_size, stderr_reset = remote_log_delta(
+        client, job_dir, "stderr.log", stderr_offset, max_bytes, timeout
+    )
+    state = status.get("status", {}).get("state", "unknown")
+    result = {
+        **status,
+        "stdout_offset": next_stdout,
+        "stderr_offset": next_stderr,
+        "stdout_size": stdout_size,
+        "stderr_size": stderr_size,
+        "stdout_complete": next_stdout >= stdout_size,
+        "stderr_complete": next_stderr >= stderr_size,
+        "follow_complete": state in {"finished", "cancelled"}
+        and next_stdout >= stdout_size
+        and next_stderr >= stderr_size,
+    }
+    if stdout:
+        result["stdout_delta"] = stdout
+    if stderr:
+        result["stderr_delta"] = stderr
+    if stdout_reset or stderr_reset:
+        result["offset_reset"] = True
+    return result
+
+
+def remote_jobs(
+    client: paramiko.SSHClient,
+    limit: int,
+    tail: int,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    if limit < 1:
+        raise ValueError("job limit must be positive")
+    home = remote_home(client, timeout)
+    jobs_dir = posixpath.join(home, ".agent-ops", "jobs")
+    quoted_jobs_dir = shlex.quote(jobs_dir)
+    command = (
+        f"for path in {quoted_jobs_dir}/*; do "
+        "[ -d \"$path\" ] || continue; basename \"$path\"; done"
+    )
+    reply = exec_command(client, command, timeout, 32_000)
+    job_ids = [
+        value.strip()
+        for value in str(reply.get("stdout", "")).splitlines()
+        if value.strip() and JOB_ID_RE.fullmatch(value.strip())
+    ]
+    jobs: list[dict[str, Any]] = []
+    for job_id in sorted(job_ids, reverse=True)[:limit]:
+        item = remote_job_status(client, job_id, tail, timeout)
+        if not item.get("error"):
+            jobs.append(item)
+    return {"jobs": jobs, "remote_dir": jobs_dir}
+
+
+def remote_job_cancel(
+    client: paramiko.SSHClient,
+    job_id: str,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    validate_job_id(job_id)
+    current = remote_job_status(client, job_id, 0, timeout)
+    if current.get("error"):
+        return {**current, "cancelled": False}
+
+    state = str(current.get("status", {}).get("state", "unknown"))
+    if state in {"finished", "cancelled"}:
+        return {**current, "cancelled": False, "reason": f"already_{state}"}
+    if state != "running":
+        return {**current, "cancelled": False, "reason": "not_running"}
+
+    job_dir = shlex.quote(str(current["remote_dir"]))
+    command = (
+        f"cd {job_dir} 2>/dev/null || exit 44; "
+        ": > cancel.requested; "
+        "pid=$(sed -n 's/.*\"pid\":\\([0-9][0-9]*\\).*/\\1/p' status.json | head -n 1); "
+        "if [ -n \"$pid\" ]; then "
+        "kill -TERM -- \"-$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; fi"
+    )
+    reply = exec_command(client, command, timeout, 2_000)
+    if int(reply.get("exit_code", 0)) == 44:
+        return {"job_id": job_id, "status": {"state": "not_found"}, "cancelled": False, "error": "job not found"}
+
+    deadline = time.monotonic() + min(3, max(1, timeout))
+    latest = current
+    while time.monotonic() < deadline:
+        latest = remote_job_status(client, job_id, 0, timeout)
+        if latest.get("error"):
+            break
+        latest_state = str(latest.get("status", {}).get("state", "unknown"))
+        if latest_state in {"cancelled", "finished"}:
+            break
+        time.sleep(0.1)
+    latest_state = str(latest.get("status", {}).get("state", "cancelling"))
+    return {
+        **latest,
+        "cancelled": latest_state == "cancelled",
+        "cancel_requested": True,
+        "status": {**latest.get("status", {}), "state": latest_state},
+    }
 
 
 class Daemon:
@@ -682,6 +1063,8 @@ class Daemon:
         self.last_used = time.time()
         self.closed = threading.Event()
         self.connect_lock = threading.Lock()
+        self.forward_lock = threading.Lock()
+        self.forwards: dict[str, PortForward] = {}
         self.sock_path = socket_path(profile_id)
         self.ensure_connected()
 
@@ -696,10 +1079,62 @@ class Daemon:
         return bool(self.clients) and all(transport_connected(client) for client in self.clients)
 
     def close_connection(self) -> None:
+        with self.forward_lock:
+            forwards = list(self.forwards.values())
+        for forward in forwards:
+            forward.close()
         close_connection_chain(self.clients, self.proxy_channels)
         self.client = None
         self.clients = []
         self.proxy_channels = []
+
+    def open_forward(self, payload: dict[str, Any]) -> dict[str, Any]:
+        bind_host = str(payload.get("bind_host", "127.0.0.1"))
+        local_port = int(payload.get("local_port", 0))
+        remote_host = str(payload.get("remote_host", ""))
+        remote_port = int(payload.get("remote_port", 0))
+        if not remote_host:
+            raise ValueError("forward remote host is required")
+        if not 0 <= local_port <= 65535:
+            raise ValueError("forward local port must be between 0 and 65535")
+        if not 1 <= remote_port <= 65535:
+            raise ValueError("forward remote port must be between 1 and 65535")
+        self.ensure_connected()
+        forward_id = "fwd-" + uuid.uuid4().hex[:8]
+        forward = PortForward(
+            self,
+            forward_id,
+            bind_host,
+            local_port,
+            remote_host,
+            remote_port,
+        )
+        forward.start()
+        with self.forward_lock:
+            self.forwards[forward_id] = forward
+        return forward.snapshot()
+
+    def forward_list(self, forward_id: str = "") -> dict[str, Any]:
+        with self.forward_lock:
+            forwards = list(self.forwards.values())
+        if forward_id:
+            forwards = [forward for forward in forwards if forward.forward_id == forward_id]
+        return {
+            "profile": self.profile_id,
+            "forwards": [forward.snapshot() for forward in forwards],
+        }
+
+    def close_forward(self, forward_id: str) -> dict[str, Any]:
+        with self.forward_lock:
+            forward = self.forwards.get(forward_id)
+        if not forward:
+            return {
+                "profile": self.profile_id,
+                "forward_id": forward_id,
+                "state": "not_found",
+                "closed": False,
+            }
+        return {"profile": self.profile_id, **forward.close()}
 
     def ensure_connected(self) -> paramiko.SSHClient:
         if self.chain_connected():
@@ -744,6 +1179,12 @@ class Daemon:
         client = self.ensure_connected()
         self.last_used = time.time()
         operation_timeout = int(payload.get("timeout", DEFAULT_TIMEOUT))
+        if action == "forward_open":
+            return {"profile": self.profile_id, **self.open_forward(payload)}
+        if action in {"forward_list", "forward_status"}:
+            return self.forward_list(str(payload.get("forward_id", "")))
+        if action == "forward_close":
+            return self.close_forward(str(payload.get("forward_id", "")))
         if action == "exec":
             return exec_command(
                 client,
@@ -759,6 +1200,24 @@ class Daemon:
                 payload["job_id"],
                 int(payload.get("tail", 120)),
                 operation_timeout,
+            )
+        if action == "jobs":
+            return remote_jobs(
+                client,
+                int(payload.get("limit", 100)),
+                int(payload.get("tail", 0)),
+                operation_timeout,
+            )
+        if action == "cancel":
+            return remote_job_cancel(client, payload["job_id"], operation_timeout)
+        if action == "job_follow":
+            return remote_job_follow(
+                client,
+                payload["job_id"],
+                int(payload.get("stdout_offset", 0)),
+                int(payload.get("stderr_offset", 0)),
+                operation_timeout,
+                int(payload.get("max_bytes", FORWARD_CHUNK_BYTES)),
             )
         if action == "put":
             return sftp_put(client, payload["local"], payload["remote"], operation_timeout)
@@ -1084,7 +1543,26 @@ def operation_request(args: argparse.Namespace) -> dict[str, Any]:
             parts = parts[1:]
         return {"command": " ".join(parts).strip()}
     if args.action in {"job", "wait"}:
-        return {"job_id": args.job_id, "tail": args.tail}
+        return {
+            "job_id": args.job_id,
+            "tail": args.tail,
+            "follow": bool(getattr(args, "follow", False)),
+            "interval": getattr(args, "interval", 0),
+        }
+    if args.action == "jobs":
+        return {"tail": args.tail, "limit": args.limit}
+    if args.action == "cancel":
+        return {"job_id": args.job_id}
+    if args.action == "forward":
+        values = {"forward_action": args.forward_action}
+        for name in (
+            "forward_id", "bind_host", "local_port_arg", "remote_host_arg",
+            "remote_port_arg", "local_port_option", "remote_host_option",
+            "remote_port_option",
+        ):
+            if hasattr(args, name) and getattr(args, name) not in (None, ""):
+                values[name] = getattr(args, name)
+        return values
     return {
         key: getattr(args, key)
         for key in ("local", "remote", "max_bytes")
@@ -1147,6 +1625,68 @@ def render_job(result: dict[str, Any]) -> None:
         write_stream(sys.stdout, stderr)
 
 
+def render_jobs(result: dict[str, Any]) -> None:
+    rows = []
+    for job in result.get("jobs", []):
+        status = job.get("status", {})
+        command = str(job.get("command", "")).replace("\n", " ")
+        rows.append([
+            job.get("job_id", ""),
+            command,
+            status.get("state", "unknown"),
+            status.get("pid", ""),
+            status.get("started_at", job.get("created_at", "")),
+            status.get("ended_at", ""),
+            job.get("stdout_log", ""),
+            job.get("stderr_log", ""),
+        ])
+    write_stream(
+        sys.stdout,
+        csv_text(
+            f"jobs={len(rows)}",
+            ["job_id", "command", "state", "pid", "created_at", "ended_at", "stdout_log", "stderr_log"],
+            rows,
+        ),
+    )
+
+
+def render_forward_list(result: dict[str, Any]) -> None:
+    rows = []
+    for forward in result.get("forwards", []):
+        rows.append([
+            forward.get("forward_id", ""),
+            forward.get("state", "unknown"),
+            forward.get("bind_host", forward.get("local_host", "")),
+            forward.get("local_port", ""),
+            forward.get("remote_host", ""),
+            forward.get("remote_port", ""),
+            forward.get("active_connections", 0),
+            forward.get("error", ""),
+        ])
+    write_stream(
+        sys.stdout,
+        csv_text(
+            f"forwards={len(rows)}",
+            ["forward_id", "state", "bind_host", "local_port", "remote_host", "remote_port", "active_connections", "error"],
+            rows,
+        ),
+    )
+
+
+def render_follow_event(job_id: str, event: str, payload: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print_json({"event": event, "job_id": job_id, **payload})
+        return
+    if event == "state":
+        values: list[tuple[str, Any]] = [("job", job_id), ("state", payload.get("state", "unknown"))]
+        if "exit_code" in payload:
+            values.append(("exit", payload["exit_code"]))
+        write_stream(sys.stdout, "# " + key_value_text(values))
+        return
+    write_stream(sys.stdout, f"# {event}\n")
+    write_stream(sys.stdout, str(payload.get("data", "")))
+
+
 def render_result(action: str, result: dict[str, Any], as_json: bool, cached: bool = False) -> None:
     if as_json:
         print_json(result)
@@ -1162,6 +1702,26 @@ def render_result(action: str, result: dict[str, Any], as_json: bool, cached: bo
         render_ls(result)
     elif action in {"job", "wait"}:
         render_job(result)
+    elif action == "jobs":
+        render_jobs(result)
+    elif action == "cancel":
+        write_stream(sys.stdout, key_value_text([
+            ("job_id", result.get("job_id", "")),
+            ("state", result.get("status", {}).get("state", "unknown")),
+            ("cancelled", result.get("cancelled", False)),
+            ("cancel_requested", result.get("cancel_requested", False)),
+        ]))
+    elif action == "forward":
+        if "forwards" in result:
+            render_forward_list(result)
+        else:
+            write_stream(sys.stdout, key_value_text([
+                ("forward_id", result.get("forward_id", "")),
+                ("state", result.get("state", "unknown")),
+                ("local", f"{result.get('bind_host', result.get('local_host', ''))}:{result.get('local_port', '')}"),
+                ("remote", f"{result.get('remote_host', '')}:{result.get('remote_port', '')}"),
+                ("closed", result.get("closed", "")),
+            ]))
     elif action == "run":
         write_stream(sys.stdout, key_value_text([
             ("job_id", result.get("job_id", "")),
@@ -1215,6 +1775,8 @@ def run_run_cli(args: argparse.Namespace) -> int:
 
 
 def run_job_cli(args: argparse.Namespace) -> int:
+    if args.follow:
+        return run_follow_cli(args)
     result = send_alias_request(
         args.alias,
         {"action": "job", "job_id": args.job_id, "tail": args.tail, "timeout": args.timeout},
@@ -1225,6 +1787,8 @@ def run_job_cli(args: argparse.Namespace) -> int:
 
 
 def run_wait_cli(args: argparse.Namespace) -> int:
+    if args.follow:
+        return run_follow_cli(args)
     while True:
         result = send_alias_request(
             args.alias,
@@ -1235,9 +1799,130 @@ def run_wait_cli(args: argparse.Namespace) -> int:
         if result.get("error"):
             return finish_operation(args, result, 1)
         status_payload = result.get("status", {})
-        if status_payload.get("state") == "finished":
-            return finish_operation(args, result, int(status_payload.get("exit_code") or 0))
+        if status_payload.get("state") in {"finished", "cancelled"}:
+            exit_code = int(status_payload.get("exit_code") or 0)
+            return finish_operation(args, result, exit_code)
         time.sleep(args.interval)
+
+
+def run_follow_cli(args: argparse.Namespace) -> int:
+    stdout_offset = 0
+    stderr_offset = 0
+    last_state = ""
+    result: dict[str, Any] = {}
+    while True:
+        result = send_alias_request(
+            args.alias,
+            {
+                "action": "job_follow",
+                "job_id": args.job_id,
+                "stdout_offset": stdout_offset,
+                "stderr_offset": stderr_offset,
+                "timeout": args.timeout,
+                "max_bytes": FORWARD_CHUNK_BYTES,
+            },
+            timeout=args.timeout + 5,
+            connect_timeout=args.timeout,
+        )
+        if result.get("error"):
+            save_operation_result(args, result, False)
+            render_result(args.action, result, getattr(args, "json", False))
+            return 1
+
+        status = result.get("status", {})
+        state = str(status.get("state", "unknown"))
+        if state != last_state:
+            render_follow_event(args.job_id, "state", status, getattr(args, "json", False))
+            last_state = state
+        if result.get("stdout_delta"):
+            render_follow_event(
+                args.job_id,
+                "stdout",
+                {"data": result["stdout_delta"]},
+                getattr(args, "json", False),
+            )
+        if result.get("stderr_delta"):
+            render_follow_event(
+                args.job_id,
+                "stderr",
+                {"data": result["stderr_delta"]},
+                getattr(args, "json", False),
+            )
+        stdout_offset = int(result.get("stdout_offset", stdout_offset))
+        stderr_offset = int(result.get("stderr_offset", stderr_offset))
+        if result.get("follow_complete"):
+            exit_code = int(status.get("exit_code") or 0)
+            save_operation_result(args, result, exit_code == 0)
+            return exit_code
+        time.sleep(args.interval)
+
+
+def run_jobs_cli(args: argparse.Namespace) -> int:
+    result = send_alias_request(
+        args.alias,
+        {"action": "jobs", "limit": args.limit, "tail": args.tail, "timeout": args.timeout},
+        timeout=args.timeout + 5,
+        connect_timeout=args.timeout,
+    )
+    return finish_operation(args, result, 1 if result.get("error") else 0)
+
+
+def run_cancel_cli(args: argparse.Namespace) -> int:
+    result = send_alias_request(
+        args.alias,
+        {"action": "cancel", "job_id": args.job_id, "timeout": args.timeout},
+        timeout=args.timeout + 5,
+        connect_timeout=args.timeout,
+    )
+    if result.get("error") and result.get("status", {}).get("state") != "not_found":
+        exit_code = 1
+    elif result.get("status", {}).get("state") == "not_found":
+        exit_code = 1
+    else:
+        exit_code = 0
+    return finish_operation(args, result, exit_code)
+
+
+def forward_request(args: argparse.Namespace) -> dict[str, Any]:
+    if args.forward_action == "open":
+        local_port = args.local_port_option if args.local_port_option is not None else args.local_port_arg
+        remote_host = args.remote_host_option or args.remote_host_arg
+        remote_port = args.remote_port_option if args.remote_port_option is not None else args.remote_port_arg
+        if local_port is None or not remote_host or remote_port is None:
+            raise ValueError("forward open needs local port, remote host, and remote port")
+        return {
+            "action": "forward_open",
+            "bind_host": args.bind_host,
+            "local_port": local_port,
+            "remote_host": remote_host,
+            "remote_port": remote_port,
+            "timeout": args.timeout,
+        }
+    if args.forward_action == "list":
+        return {"action": "forward_list", "timeout": args.timeout}
+    if args.forward_action == "status":
+        return {
+            "action": "forward_status",
+            "forward_id": args.forward_id,
+            "timeout": args.timeout,
+        }
+    if args.forward_action == "close":
+        return {
+            "action": "forward_close",
+            "forward_id": args.forward_id,
+            "timeout": args.timeout,
+        }
+    raise ValueError(f"unknown forward action: {args.forward_action}")
+
+
+def run_forward_cli(args: argparse.Namespace) -> int:
+    result = send_alias_request(
+        args.alias,
+        forward_request(args),
+        timeout=args.timeout + 5,
+        connect_timeout=args.timeout,
+    )
+    return finish_operation(args, result, 1 if result.get("error") else 0)
 
 
 def run_simple_request(args: argparse.Namespace) -> int:
@@ -1328,8 +2013,25 @@ def build_parser() -> argparse.ArgumentParser:
     job_parser.add_argument("job_id")
     job_parser.add_argument("--tail", type=int, default=120)
     job_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    job_parser.add_argument("--follow", action="store_true")
+    job_parser.add_argument("--interval", type=int, default=5)
     add_json_arg(job_parser)
     job_parser.set_defaults(func=run_job_cli)
+
+    jobs_parser = subparsers.add_parser("jobs")
+    jobs_parser.add_argument("alias")
+    jobs_parser.add_argument("--limit", type=int, default=100)
+    jobs_parser.add_argument("--tail", type=int, default=0)
+    jobs_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    add_json_arg(jobs_parser)
+    jobs_parser.set_defaults(func=run_jobs_cli)
+
+    cancel_parser = subparsers.add_parser("cancel")
+    cancel_parser.add_argument("alias")
+    cancel_parser.add_argument("job_id")
+    cancel_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    add_json_arg(cancel_parser)
+    cancel_parser.set_defaults(func=run_cancel_cli)
 
     wait_parser = subparsers.add_parser("wait")
     wait_parser.add_argument("alias")
@@ -1337,8 +2039,41 @@ def build_parser() -> argparse.ArgumentParser:
     wait_parser.add_argument("--tail", type=int, default=120)
     wait_parser.add_argument("--interval", type=int, default=5)
     wait_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    wait_parser.add_argument("--follow", action="store_true")
     add_json_arg(wait_parser)
     wait_parser.set_defaults(func=run_wait_cli)
+
+    forward_parser = subparsers.add_parser("forward")
+    forward_subparsers = forward_parser.add_subparsers(dest="forward_action", required=True)
+
+    forward_open = forward_subparsers.add_parser("open")
+    forward_open.add_argument("alias")
+    forward_open.add_argument("local_port_arg", nargs="?", type=int)
+    forward_open.add_argument("remote_host_arg", nargs="?")
+    forward_open.add_argument("remote_port_arg", nargs="?", type=int)
+    forward_open.add_argument("--bind-host", default="127.0.0.1")
+    forward_open.add_argument("--local-port", dest="local_port_option", type=int)
+    forward_open.add_argument("--remote-host", dest="remote_host_option")
+    forward_open.add_argument("--remote-port", dest="remote_port_option", type=int)
+    forward_open.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    add_json_arg(forward_open)
+    forward_open.set_defaults(func=run_forward_cli)
+
+    for name in ("list", "status"):
+        parser_for_action = forward_subparsers.add_parser(name)
+        parser_for_action.add_argument("alias")
+        if name == "status":
+            parser_for_action.add_argument("forward_id")
+        parser_for_action.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+        add_json_arg(parser_for_action)
+        parser_for_action.set_defaults(func=run_forward_cli)
+
+    forward_close = forward_subparsers.add_parser("close")
+    forward_close.add_argument("alias")
+    forward_close.add_argument("forward_id")
+    forward_close.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    add_json_arg(forward_close)
+    forward_close.set_defaults(func=run_forward_cli)
 
     put_parser = subparsers.add_parser("put")
     put_parser.add_argument("alias")

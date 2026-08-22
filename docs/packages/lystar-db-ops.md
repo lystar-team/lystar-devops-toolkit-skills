@@ -26,3 +26,14 @@
 lystar-skill-update check lystar-db-ops
 lystar-skill-update update lystar-db-ops
 ```
+
+## 事务与数据源版本
+
+```bash
+dbx source show prod
+dbx exec "UPDATE demo SET enabled = 1" --transaction commit
+dbx exec "UPDATE demo SET enabled = 1" --transaction rollback
+dbx import backup.sql --transaction commit
+```
+
+数据源统一使用 `db_type`（`mysql`、`mariadb`、`postgresql`），并保留 `engine` 兼容字段。`source show` 和实际连接会探测服务端 `version` 与 `version_parts`；连接失败、版本未探测和版本查询失败分别返回明确状态。`exec`/`import` 默认提交，`rollback` 只作用于当前命令的单次事务。

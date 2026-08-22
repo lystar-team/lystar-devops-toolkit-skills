@@ -201,6 +201,154 @@ class DatabaseRegistryTest(unittest.TestCase):
         self.assertEqual(config["profiles"][profile_id]["password"], "two")
 
 
+class FakeDatabaseCursor:
+    def __init__(self, connection: "FakeDatabaseConnection") -> None:
+        self.connection = connection
+        self.description = None
+        self.rowcount = 1
+        self.executed: list[str] = []
+
+    def __enter__(self) -> "FakeDatabaseCursor":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str) -> None:
+        self.executed.append(sql)
+        self.connection.executed.append(sql)
+        if "FAIL" in sql:
+            raise RuntimeError("synthetic SQL failure")
+        if "VERSION()" in sql.upper():
+            self.description = [("VERSION()",)]
+
+    def fetchone(self):
+        return {"VERSION()": self.connection.version}
+
+    def nextset(self) -> bool:
+        return False
+
+
+class FakeDatabaseConnection:
+    def __init__(self, version: str = "10.11.8-MariaDB") -> None:
+        self.version = version
+        self.commits = 0
+        self.rollbacks = 0
+        self.closed = False
+        self.executed: list[str] = []
+
+    def cursor(self, **_kwargs: object) -> FakeDatabaseCursor:
+        return FakeDatabaseCursor(self)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class DatabaseTransactionAndVersionTest(unittest.TestCase):
+    def test_version_normalization_keeps_database_version_only(self) -> None:
+        self.assertEqual(db_core.normalize_engine("postgres"), "postgresql")
+        self.assertEqual(db_core.version_parts("PostgreSQL 16.3 (Ubuntu 16.3-1)"), (16, 3))
+        self.assertEqual(db_core.version_parts("10.11.8-MariaDB-1:10.11.8"), (10, 11, 8))
+
+    def test_version_probe_uses_engine_specific_queries(self) -> None:
+        for engine, version, expected_sql in (
+            ("mysql", "8.0.36", "SELECT VERSION()"),
+            ("mariadb", "10.11.8-MariaDB", "SELECT VERSION()"),
+            ("postgresql", "PostgreSQL 16.3", "SELECT version()"),
+        ):
+            connection = FakeDatabaseConnection(version)
+            result = db_core.probe_server_version(connection, engine)
+            self.assertEqual(result["version_status"], "detected")
+            self.assertEqual(result["version"], version)
+            self.assertEqual(result["version_parts"][:2], list(db_core.version_parts(version)[:2]))
+
+            self.assertEqual(connection.executed[-1], expected_sql)
+
+    def test_single_command_transaction_commit_and_rollback(self) -> None:
+        datasource = db_core.DataSource(
+            engine="mariadb",
+            host="127.0.0.1",
+            port=3306,
+            database="demo",
+            user="root",
+            password="secret",
+            source="test",
+            framework="manual",
+        )
+        committed = FakeDatabaseConnection()
+        with patch.object(db_core, "connect", return_value=("pymysql", committed)):
+            result = db_core.run_non_query(datasource, "UPDATE demo SET value = 1")
+        self.assertEqual(result["transaction"]["state"], "committed")
+        self.assertEqual(committed.commits, 1)
+        self.assertEqual(committed.rollbacks, 0)
+
+        rolled_back = FakeDatabaseConnection()
+        with patch.object(db_core, "connect", return_value=("pymysql", rolled_back)):
+            result = db_core.run_non_query(
+                datasource,
+                "UPDATE demo SET value = 2",
+                transaction="rollback",
+            )
+        self.assertEqual(result["transaction"]["state"], "rolled_back")
+        self.assertEqual(rolled_back.commits, 0)
+        self.assertEqual(rolled_back.rollbacks, 1)
+
+    def test_failed_transaction_reports_rollback_state(self) -> None:
+        datasource = db_core.DataSource(
+            engine="mysql",
+            host="127.0.0.1",
+            port=3306,
+            database="demo",
+            user="root",
+            password="secret",
+            source="test",
+            framework="manual",
+        )
+        connection = FakeDatabaseConnection()
+        with patch.object(db_core, "connect", return_value=("pymysql", connection)):
+            with self.assertRaises(db_core.TransactionError) as context:
+                db_core.run_non_query(datasource, "FAIL UPDATE demo")
+        self.assertEqual(context.exception.details["transaction"]["state"], "failed")
+        self.assertTrue(context.exception.details["transaction"]["rolled_back"])
+        self.assertEqual(connection.rollbacks, 1)
+
+    def test_connection_failure_is_distinct_from_version_probe_failure(self) -> None:
+        datasource = db_core.DataSource(
+            engine="postgresql",
+            host="127.0.0.1",
+            port=5432,
+            database="demo",
+            user="postgres",
+            password="secret",
+            source="test",
+            framework="manual",
+        )
+        with patch.object(
+            db_core,
+            "connect",
+            side_effect=db_core.DatabaseConnectionError("connection refused"),
+        ):
+            result = db_core.probe_datasource(datasource)
+        self.assertEqual(result["connection_status"], "unavailable")
+        self.assertEqual(result["version_status"], "not_probed")
+
+        connection = FakeDatabaseConnection()
+        with patch.object(
+            connection,
+            "cursor",
+            side_effect=RuntimeError("version query denied"),
+        ):
+            result = db_core.probe_server_version(connection, "postgresql")
+        self.assertEqual(result["connection_status"], "connected")
+        self.assertEqual(result["version_status"], "query_failed")
+
+
 class DatabaseLastIntegrationTest(unittest.TestCase):
     def test_successful_query_snapshot_renders_csv_or_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -347,6 +495,61 @@ class SshOutputTest(unittest.TestCase):
             stdout.getvalue(),
             "# job=job-1 state=finished exit=3\nnormal output\n# stderr\nfailure details\n",
         )
+
+    def test_new_job_and_forward_commands_parse(self) -> None:
+        parser = ssh_ops.build_parser()
+        self.assertEqual(parser.parse_args(["jobs", "prod"]).limit, 100)
+        self.assertTrue(parser.parse_args(["job", "prod", "job-1", "--follow"]).follow)
+        forward = parser.parse_args(["forward", "open", "prod", "15432", "db.internal", "5432"])
+        self.assertEqual(forward.forward_action, "open")
+        self.assertEqual(forward.local_port_arg, 15432)
+        self.assertEqual(forward.remote_host_arg, "db.internal")
+        self.assertEqual(forward.remote_port_arg, 5432)
+
+    def test_job_status_parses_metadata_and_tail_sections(self) -> None:
+        output = (
+            "META_JSON\n"
+            '{"command":"sleep 10","created_at":"2026-08-22T00:00:00Z",'
+            '"stdout_log":"/tmp/stdout.log","stderr_log":"/tmp/stderr.log"}\n'
+            "STATUS_JSON\n"
+            '{"state":"running","pid":42,"started_at":"2026-08-22T00:00:00Z"}\n'
+            "STDOUT_TAIL\n"
+            "line one\n\n"
+            "STDERR_TAIL\n"
+            "warning\n"
+        )
+        with patch.object(ssh_ops, "remote_home", return_value="/home/test"):
+            with patch.object(ssh_ops, "exec_command", return_value={"exit_code": 0, "stdout": output}):
+                result = ssh_ops.remote_job_status(object(), "job-1", 10, 5)
+        self.assertEqual(result["command"], "sleep 10")
+        self.assertEqual(result["status"]["state"], "running")
+        self.assertEqual(result["stdout"], "line one\n")
+        self.assertEqual(result["stderr"], "warning\n")
+
+    def test_follow_event_separates_state_and_streams(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            ssh_ops.render_follow_event("job-1", "state", {"state": "running"}, False)
+            ssh_ops.render_follow_event("job-1", "stdout", {"data": "line\n"}, False)
+            ssh_ops.render_follow_event("job-1", "stderr", {"data": "warn\n"}, False)
+        self.assertEqual(stdout.getvalue(), "# job=job-1 state=running\n# stdout\nline\n# stderr\nwarn\n")
+
+    def test_job_follow_tracks_offsets_until_terminal_logs_are_drained(self) -> None:
+        with patch.object(
+            ssh_ops,
+            "remote_job_status",
+            return_value={"job_id": "job-1", "remote_dir": "/home/test/.agent-ops/jobs/job-1", "status": {"state": "finished", "exit_code": 0}},
+        ), patch.object(
+            ssh_ops,
+            "remote_log_delta",
+            side_effect=[("out\n", 4, 4, False), ("err\n", 4, 4, False)],
+        ):
+            result = ssh_ops.remote_job_follow(object(), "job-1", 0, 0, 5, 64)
+        self.assertTrue(result["follow_complete"])
+        self.assertEqual(result["stdout_offset"], 4)
+        self.assertEqual(result["stderr_offset"], 4)
+        self.assertEqual(result["stdout_delta"], "out\n")
+        self.assertEqual(result["stderr_delta"], "err\n")
 
 
 class SshProfileChainTest(unittest.TestCase):
@@ -637,6 +840,44 @@ class MockSshService:
             worker.join(timeout=2)
 
 
+class LocalEchoService:
+    def __init__(self) -> None:
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(8)
+        self.listener.settimeout(0.2)
+        self.port = self.listener.getsockname()[1]
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                client, _address = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            threading.Thread(target=self.handle, args=(client,), daemon=True).start()
+
+    @staticmethod
+    def handle(client: socket.socket) -> None:
+        with client:
+            while True:
+                data = client.recv(64 * 1024)
+                if not data:
+                    return
+                client.sendall(data)
+
+    def close(self) -> None:
+        self.stop_event.set()
+        self.listener.close()
+        self.thread.join(timeout=2)
+
+
 class SshIntegrationTest(unittest.TestCase):
     def test_saved_password_concurrency_and_close(self) -> None:
         service = MockSshService()
@@ -717,6 +958,61 @@ class SshIntegrationTest(unittest.TestCase):
                 self.assertTrue(json.loads(cleared.stdout)["cleared"])
             finally:
                 run("close", "local")
+                service.close()
+
+    def test_local_forward_lifecycle_uses_existing_daemon_connection(self) -> None:
+        service = MockSshService(forwarding=True)
+        echo = LocalEchoService()
+        service.start()
+        echo.start()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {
+                **os.environ,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_STATE_HOME": str(root / "state"),
+                "XDG_RUNTIME_DIR": str(root / "runtime"),
+                "PI_SESSION_ID": "ssh-forward-integration",
+            }
+            sshx = str(BIN_DIR / "sshx")
+
+            def run(*args: str, timeout: int = 15) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sshx, *args], env=env, cwd=root, text=True,
+                    capture_output=True, timeout=timeout,
+                )
+
+            try:
+                opened = run("open", "local", f"tester@127.0.0.1:{service.port}", "plain-password")
+                self.assertEqual(opened.returncode, 0, opened.stderr + opened.stdout)
+
+                created = run(
+                    "forward", "open", "--json", "local", "0", "127.0.0.1", str(echo.port),
+                )
+                self.assertEqual(created.returncode, 0, created.stderr + created.stdout)
+                forward = json.loads(created.stdout)
+                self.assertEqual(forward["state"], "open")
+                self.assertGreater(forward["local_port"], 0)
+
+                with socket.create_connection(("127.0.0.1", forward["local_port"]), timeout=5) as client:
+                    client.sendall(b"through-forward")
+                    self.assertEqual(client.recv(64), b"through-forward")
+
+                listed = run("forward", "list", "--json", "local")
+                self.assertEqual(listed.returncode, 0, listed.stderr + listed.stdout)
+                self.assertEqual(json.loads(listed.stdout)["forwards"][0]["state"], "open")
+
+                closed = run("forward", "close", "--json", "local", forward["forward_id"])
+                self.assertEqual(closed.returncode, 0, closed.stderr + closed.stdout)
+                self.assertTrue(json.loads(closed.stdout)["closed"])
+
+                with self.assertRaises(OSError):
+                    socket.create_connection(("127.0.0.1", forward["local_port"]), timeout=1)
+                status = run("forward", "status", "--json", "local", forward["forward_id"])
+                self.assertEqual(json.loads(status.stdout)["forwards"][0]["state"], "closed")
+            finally:
+                run("close", "local")
+                echo.close()
                 service.close()
 
 

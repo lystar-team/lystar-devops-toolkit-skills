@@ -36,3 +36,20 @@ sshx server-3 "hostname"
 lystar-skill-update check lystar-ssh-ops
 lystar-skill-update update lystar-ssh-ops
 ```
+
+## 长任务与端口转发
+
+```bash
+sshx run prod "long-running-command"
+sshx jobs prod
+sshx job prod <job_id>
+sshx cancel prod <job_id>
+sshx wait prod <job_id> --follow
+
+sshx forward open prod 15432 db.internal 5432
+sshx forward list prod
+sshx forward status prod <forward_id>
+sshx forward close prod <forward_id>
+```
+
+任务列表和单任务查询沿用远端 `~/.agent-ops/jobs/<job_id>`；`--follow` 按日志偏移增量输出 stdout/stderr 和状态变化。端口转发由已有 SSH daemon 管理，关闭 profile 时一并回收。

@@ -78,10 +78,18 @@ class DataSource:
     profile: str = ""
     name: str = "default"
     url: str = ""
+    version: str = ""
+    version_parts: Tuple[int, ...] = ()
+    version_status: str = "not_probed"
+    version_error: str = ""
+    connection_status: str = "unknown"
+    version_checked_at: str = ""
 
     def masked(self) -> Dict[str, Any]:
         payload = asdict(self)
         payload["password"] = "***" if self.password else ""
+        payload["db_type"] = self.engine
+        payload["version_parts"] = list(self.version_parts)
         if payload.get("url"):
             payload["url"] = mask_secret_in_url(payload["url"])
         return payload
@@ -172,6 +180,17 @@ def fail(message: str, details: Optional[Dict[str, Any]] = None, code: int = 1) 
             payload["details"] = details
         elif details.get("hint"):
             payload["hint"] = details["hint"]
+        else:
+            for key in (
+                "transaction",
+                "connection_status",
+                "version_status",
+                "version",
+                "version_parts",
+                "version_error",
+            ):
+                if key in details:
+                    payload[key] = details[key]
     print_json(payload)
     raise SystemExit(code)
 
@@ -193,6 +212,12 @@ def compact_datasource(datasource: DataSource) -> Dict[str, Any]:
         "name": datasource.name,
         "profile": datasource.profile,
         "source": datasource.source,
+        "db_type": datasource.engine,
+        "engine": datasource.engine,
+        "version": datasource.version,
+        "version_parts": list(datasource.version_parts),
+        "version_status": datasource.version_status,
+        "connection_status": datasource.connection_status,
     }
 
 
@@ -200,6 +225,7 @@ def model_datasource(datasource: DataSource) -> Dict[str, Any]:
     """Return model-friendly datasource details without secrets."""
 
     return {
+        "db_type": datasource.engine,
         "engine": datasource.engine,
         "database": datasource.database,
         "host": datasource.host,
@@ -207,6 +233,12 @@ def model_datasource(datasource: DataSource) -> Dict[str, Any]:
         "name": datasource.name,
         "profile": datasource.profile,
         "source": datasource.source,
+        "version": datasource.version,
+        "version_parts": list(datasource.version_parts),
+        "version_status": datasource.version_status,
+        "version_error": datasource.version_error,
+        "connection_status": datasource.connection_status,
+        "version_checked_at": datasource.version_checked_at,
     }
 
 
@@ -231,6 +263,7 @@ def build_output_payload(
         }
     elif CURRENT_OUTPUT == "model":
         summary: Dict[str, Any] = {
+            "db_type": datasource.engine,
             "engine": datasource.engine,
             "database": datasource.database,
         }
@@ -241,6 +274,7 @@ def build_output_payload(
             "ok": True,
             "action": action,
             "db": datasource_brief(datasource),
+            "datasource": model_datasource(datasource),
             "summary": summary,
             "result": result,
         }
@@ -249,6 +283,7 @@ def build_output_payload(
             "ok": True,
             "action": action,
             "db": datasource_brief(datasource),
+            "datasource": model_datasource(datasource),
             "result": result,
         }
 
@@ -292,6 +327,127 @@ def default_port(engine: str) -> int:
     if engine == "postgresql":
         return 5432
     raise ValueError(f"Unsupported database engine: {engine}")
+
+
+class DatabaseConnectionError(RuntimeError):
+    """Connection failure with structured status for callers and snapshots."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.details = {
+            "connection_status": "unavailable",
+            "version_status": "not_probed",
+            "version": "",
+            "version_parts": [],
+            "version_error": "connection was not established",
+        }
+
+
+class TransactionError(RuntimeError):
+    """SQL execution failure with transaction state attached."""
+
+    def __init__(self, message: str, details: Dict[str, Any]):
+        super().__init__(message)
+        self.details = details
+
+
+def version_parts(value: str) -> Tuple[int, ...]:
+    """Extract numeric components that can be compared by callers."""
+
+    matched = re.search(r"\b\d+(?:\.\d+){1,7}", value)
+    if not matched:
+        return ()
+    return tuple(int(item) for item in matched.group(0).split("."))
+
+
+def version_result(
+    *,
+    connection_status: str,
+    version_status: str,
+    version: str = "",
+    error: str = "",
+) -> Dict[str, Any]:
+    parts = version_parts(version) if version else ()
+    return {
+        "connection_status": connection_status,
+        "version_status": version_status,
+        "version": version,
+        "version_parts": list(parts),
+        "version_error": error,
+        "version_checked_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+    }
+
+
+def apply_version_result(datasource: DataSource, result: Dict[str, Any]) -> None:
+    """Copy a probe result into the in-memory normalized datasource."""
+
+    datasource.connection_status = str(result.get("connection_status", datasource.connection_status))
+    datasource.version_status = str(result.get("version_status", datasource.version_status))
+    datasource.version = str(result.get("version", ""))
+    datasource.version_parts = tuple(int(item) for item in result.get("version_parts", []))
+    datasource.version_error = str(result.get("version_error", ""))
+    datasource.version_checked_at = str(result.get("version_checked_at", ""))
+
+
+def probe_server_version(connection: Any, engine: str) -> Dict[str, Any]:
+    """Read the server version using the minimal engine-specific query."""
+
+    sql = "SELECT VERSION()" if engine in {"mysql", "mariadb"} else "SELECT version()"
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql)
+            row = cursor.fetchone()
+    except Exception as exc:
+        return version_result(
+            connection_status="connected",
+            version_status="query_failed",
+            error=str(exc),
+        )
+
+    if isinstance(row, dict):
+        raw = next(iter(row.values()), "")
+    elif isinstance(row, (list, tuple)):
+        raw = row[0] if row else ""
+    else:
+        raw = row or ""
+    text = str(raw).strip()
+    if not text:
+        return version_result(
+            connection_status="connected",
+            version_status="not_detected",
+        )
+    return version_result(
+        connection_status="connected",
+        version_status="detected",
+        version=text,
+    )
+
+
+def probe_datasource(datasource: DataSource) -> Dict[str, Any]:
+    """Probe connectivity and version without making a business-data change."""
+
+    try:
+        _driver, connection = connect(datasource)
+    except DatabaseConnectionError as exc:
+        result = dict(exc.details)
+        result["version_checked_at"] = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+        apply_version_result(datasource, result)
+        return result
+    except Exception as exc:
+        result = version_result(
+            connection_status="unavailable",
+            version_status="not_probed",
+            error=str(exc),
+        )
+        apply_version_result(datasource, result)
+        return result
+
+    try:
+        result = probe_server_version(connection, datasource.engine)
+    finally:
+        connection.close()
+    apply_version_result(datasource, result)
+    return result
 
 
 def mask_secret_in_url(url: str) -> str:
@@ -737,7 +893,7 @@ def build_manual_datasource(args: argparse.Namespace) -> Optional[DataSource]:
 
         engine = normalize_engine(args.db_type) if args.db_type else parsed["engine"]
         host = args.host or parsed["host"]
-        port = args.port or parsed["port"] or default_port(engine)
+        port = args.port or (parsed["port"] if not args.db_type else default_port(engine))
         database = args.database or parsed["database"]
         user = args.user or parsed.get("user", "")
         password = args.password or parsed.get("password", "")
@@ -901,17 +1057,20 @@ def connect(datasource: DataSource) -> Tuple[str, Any]:
                 "Missing dependency pymysql. Install with: python3 -m pip install pymysql"
             ) from exc
 
-        connection = pymysql.connect(
-            host=datasource.host,
-            port=int(datasource.port),
-            user=datasource.user,
-            password=datasource.password,
-            database=datasource.database,
-            charset="utf8mb4",
-            autocommit=False,
-            cursorclass=pymysql.cursors.DictCursor,
-            client_flag=CLIENT.MULTI_STATEMENTS,
-        )
+        try:
+            connection = pymysql.connect(
+                host=datasource.host,
+                port=int(datasource.port),
+                user=datasource.user,
+                password=datasource.password,
+                database=datasource.database,
+                charset="utf8mb4",
+                autocommit=False,
+                cursorclass=pymysql.cursors.DictCursor,
+                client_flag=CLIENT.MULTI_STATEMENTS,
+            )
+        except Exception as exc:
+            raise DatabaseConnectionError(f"Database connection failed: {exc}") from exc
         return "pymysql", connection
 
     if datasource.engine == "postgresql":
@@ -919,27 +1078,33 @@ def connect(datasource: DataSource) -> Tuple[str, Any]:
             import psycopg  # type: ignore
             from psycopg.rows import dict_row  # type: ignore
 
-            connection = psycopg.connect(
-                host=datasource.host,
-                port=int(datasource.port),
-                user=datasource.user,
-                password=datasource.password,
-                dbname=datasource.database,
-                autocommit=False,
-                row_factory=dict_row,
-            )
-            return "psycopg", connection
-        except ImportError:
             try:
-                import psycopg2  # type: ignore
-
-                connection = psycopg2.connect(
+                connection = psycopg.connect(
                     host=datasource.host,
                     port=int(datasource.port),
                     user=datasource.user,
                     password=datasource.password,
                     dbname=datasource.database,
+                    autocommit=False,
+                    row_factory=dict_row,
                 )
+            except Exception as exc:
+                raise DatabaseConnectionError(f"Database connection failed: {exc}") from exc
+            return "psycopg", connection
+        except ImportError:
+            try:
+                import psycopg2  # type: ignore
+
+                try:
+                    connection = psycopg2.connect(
+                        host=datasource.host,
+                        port=int(datasource.port),
+                        user=datasource.user,
+                        password=datasource.password,
+                        dbname=datasource.database,
+                    )
+                except Exception as exc:
+                    raise DatabaseConnectionError(f"Database connection failed: {exc}") from exc
                 return "psycopg2", connection
             except ImportError as exc:
                 raise RuntimeError(
@@ -1575,6 +1740,8 @@ def run_export(datasource: DataSource, args: argparse.Namespace) -> Dict[str, An
     )
 
     driver, connection = connect(datasource)
+    version = probe_server_version(connection, datasource.engine)
+    apply_version_result(datasource, version)
     del driver  # driver is selected in connect and not needed further.
 
     statements: List[str] = []
@@ -1642,15 +1809,33 @@ def run_export(datasource: DataSource, args: argparse.Namespace) -> Dict[str, An
         "tables": exported_tables,
         "schema_only": bool(args.schema_only),
         "data_only": bool(args.data_only),
+        **version,
     }
 
 
-def run_non_query(datasource: DataSource, sql: str) -> Dict[str, Any]:
-    """Execute SQL script/DDL/DML and return execution stats."""
+def run_non_query(
+    datasource: DataSource,
+    sql: str,
+    transaction: str = "commit",
+) -> Dict[str, Any]:
+    """Execute one SQL command with an explicit commit or rollback policy."""
+
+    if transaction not in {"commit", "rollback"}:
+        raise ValueError("transaction must be commit or rollback")
 
     driver, connection = connect(datasource)
+    version = probe_server_version(connection, datasource.engine)
+    apply_version_result(datasource, version)
     statement_count = 0
     affected_rows = 0
+    transaction_state: Dict[str, Any] = {
+        "mode": transaction,
+        "started": True,
+        "state": "active",
+        "current_state": "active",
+        "committed": False,
+        "rolled_back": False,
+    }
 
     try:
         if driver == "psycopg2":
@@ -1681,14 +1866,49 @@ def run_non_query(datasource: DataSource, sql: str) -> Dict[str, Any]:
                         if cursor.rowcount and cursor.rowcount > 0
                         else 0
                     )
-        connection.commit()
+
+        if transaction == "commit":
+            connection.commit()
+            transaction_state.update({
+                "state": "committed",
+                "current_state": "committed",
+                "committed": True,
+            })
+        else:
+            connection.rollback()
+            transaction_state.update({
+                "state": "rolled_back",
+                "current_state": "rolled_back",
+                "rolled_back": True,
+            })
         return {
             "statement_count": statement_count,
             "affected_rows": affected_rows,
+            "transaction": transaction_state,
+            **version,
         }
-    except Exception:
-        connection.rollback()
-        raise
+    except Exception as exc:
+        rollback_error = ""
+        try:
+            connection.rollback()
+            transaction_state.update({
+                "state": "failed",
+                "current_state": "rolled_back",
+                "rolled_back": True,
+            })
+        except Exception as rollback_exc:
+            rollback_error = str(rollback_exc)
+            transaction_state.update({
+                "state": "rollback_failed",
+                "current_state": "unknown",
+            })
+        details: Dict[str, Any] = {
+            "transaction": transaction_state,
+            **version,
+        }
+        if rollback_error:
+            details["transaction"]["rollback_error"] = rollback_error
+        raise TransactionError(str(exc), details) from exc
     finally:
         connection.close()
 
@@ -1702,18 +1922,20 @@ def run_query(datasource: DataSource, sql: str, limit: int) -> Dict[str, Any]:
     truncated = False
 
     try:
+        with connection.cursor() as readonly_cursor:
+            readonly_cursor.execute("SET TRANSACTION READ ONLY")
+        version = probe_server_version(connection, datasource.engine)
+        apply_version_result(datasource, version)
         if driver == "psycopg2":
             from psycopg2.extras import RealDictCursor  # type: ignore
 
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SET TRANSACTION READ ONLY")
                 cursor.execute(sql)
                 if cursor.description:
                     columns = cursor_columns(cursor)
                     rows, truncated = fetch_query_rows(cursor, limit)
         else:
             with connection.cursor() as cursor:
-                cursor.execute("SET TRANSACTION READ ONLY")
                 cursor.execute(sql)
                 if cursor.description:
                     columns = cursor_columns(cursor)
@@ -1726,6 +1948,7 @@ def run_query(datasource: DataSource, sql: str, limit: int) -> Dict[str, Any]:
             "has_more": truncated,
             "truncated": truncated,
             "rows": rows,
+            **version,
         }
         if limit <= 0:
             result["row_count"] = len(rows)
@@ -1787,7 +2010,7 @@ def handle_import(args: argparse.Namespace) -> None:
     datasource, candidates, framework = resolve_datasource(args)
     sql = load_sql_text("", args.sql_file)
     enforce_sql_safety(sql, args.allow_dangerous, action="import")
-    result = run_non_query(datasource, sql)
+    result = run_non_query(datasource, sql, args.transaction)
 
     print_json(
         build_output_payload(
@@ -1809,7 +2032,7 @@ def handle_exec(args: argparse.Namespace) -> None:
     datasource, candidates, framework = resolve_datasource(args)
     sql = load_sql_text(args.sql, args.sql_file)
     enforce_sql_safety(sql, args.allow_dangerous, action="exec")
-    result = run_non_query(datasource, sql)
+    result = run_non_query(datasource, sql, args.transaction)
 
     print_json(
         build_output_payload("exec", framework, candidates, datasource, result)
@@ -1929,6 +2152,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Bypass default safety guard for destructive SQL",
     )
+    import_parser.add_argument(
+        "--transaction",
+        choices=["commit", "rollback"],
+        default="commit",
+        help="Commit by default, or execute and explicitly roll back this command",
+    )
 
     exec_parser = subparsers.add_parser("exec", help="Execute SQL command/script")
     add_datasource_args(exec_parser)
@@ -1939,6 +2168,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-dangerous",
         action="store_true",
         help="Bypass default safety guard for destructive SQL",
+    )
+    exec_parser.add_argument(
+        "--transaction",
+        choices=["commit", "rollback"],
+        default="commit",
+        help="Commit by default, or execute and explicitly roll back this command",
     )
 
     query_parser = subparsers.add_parser("query", help="Run SQL query and return rows")
@@ -2045,7 +2280,7 @@ def main() -> None:
     except SystemExit:
         raise
     except Exception as exc:  # pragma: no cover - runtime safeguard
-        fail(str(exc))
+        fail(str(exc), getattr(exc, "details", None))
 
 
 if __name__ == "__main__":

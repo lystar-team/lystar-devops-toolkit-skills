@@ -33,7 +33,9 @@ dbx source show <别名|profile>
 dbx source remove <别名|profile>
 ```
 
-同一 `engine + host + port + database + user` 只保存一个 profile，多个别名可以复用。自动发现的数据源会写入全局配置，项目保存发现来源绑定和默认 profile。
+同一 `db_type + host + port + database + user` 只保存一个 profile，多个别名可以复用。`db_type` 规范化为 `mysql`、`mariadb` 或 `postgresql`；旧 profile 的 `engine` 字段继续兼容。自动发现的数据源会写入全局配置，项目保存发现来源绑定和默认 profile。
+
+`source show` 会在成功连接后执行对应数据库的版本查询，并保存 `version`、可比较的 `version_parts`、`version_status` 和 `connection_status`。发现尚未连接的数据源时，版本状态为 `not_probed`；连接失败为 `connection_status=unavailable`，版本查询失败为 `version_status=query_failed`，不伪造版本号。
 
 ## 操作
 
@@ -41,8 +43,8 @@ dbx source remove <别名|profile>
 dbx query "<只读SQL>"
 dbx query --source <数据源> "<只读SQL>"
 dbx query --json "<需要脚本解析或严格类型的只读SQL>"
-dbx exec "<DDL或DML>"
-dbx import <SQL文件>
+dbx exec "<DDL或DML>" [--transaction commit|rollback]
+dbx import <SQL文件> [--transaction commit|rollback]
 dbx export <输出文件>
 dbx last [--summary|--json|--clear]
 ```
@@ -52,6 +54,8 @@ dbx last [--summary|--json|--clear]
 ## 规则
 
 - 查询成功默认输出 CSV；需要脚本解析或严格类型时使用 `--json`。
+- `exec` 和 `import` 默认单次事务自动提交；`--transaction rollback` 会执行 SQL 后明确回滚。结果包含 `transaction.state`（`committed`、`rolled_back`、`failed` 或 `rollback_failed`）及当前事务状态。本阶段不建立跨命令持久事务会话。
+- 查询、执行、导入、导出结果统一提供 `datasource.db_type`、`datasource.engine`（兼容字段）、`datasource.version`、`datasource.version_parts` 和连接/版本状态。
 - 用户问上次结果时，当前上下文有完整结果就直接使用；缺少细节时调用 `last --summary`，确需正文再调用 `last`。
 - `query` 用于只读查询，默认返回 20 行；需要精确总数时单独执行 `COUNT(*)`。
 - `exec`、`import` 和数据库写入必须来自用户明确要求；执行后使用 `query` 回查。

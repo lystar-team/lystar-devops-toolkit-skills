@@ -64,7 +64,7 @@ def save_project(root: Path, config: dict[str, Any]) -> None:
 def datasource_identity(item: core.DataSource | dict[str, Any]) -> tuple[str, str, int, str, str]:
     if isinstance(item, dict):
         return (
-            str(item["engine"]),
+            core.normalize_engine(str(item.get("db_type", item.get("engine", "")))),
             str(item["host"]),
             int(item["port"]),
             str(item["database"]),
@@ -108,20 +108,29 @@ def bind_alias(config: dict[str, Any], requested: str, profile_id: str) -> str:
 
 def profile_from_datasource(item: core.DataSource, old: dict[str, Any] | None = None) -> dict[str, Any]:
     old = old or {}
+    version = item.version or str(old.get("version", ""))
+    raw_parts = item.version_parts or tuple(int(part) for part in old.get("version_parts", []))
     return {
         "engine": item.engine,
+        "db_type": item.engine,
         "host": item.host,
         "port": int(item.port),
         "database": item.database,
         "user": item.user,
         "password": item.password if item.password else old.get("password", ""),
         "origin": item.source,
+        "version": version,
+        "version_parts": list(raw_parts),
+        "version_status": item.version_status if item.version_status != "not_probed" else old.get("version_status", "not_probed"),
+        "version_error": item.version_error or old.get("version_error", ""),
+        "connection_status": item.connection_status if item.connection_status != "unknown" else old.get("connection_status", "unknown"),
+        "version_checked_at": item.version_checked_at or old.get("version_checked_at", ""),
     }
 
 
 def datasource_from_profile(profile_id: str, profile: dict[str, Any]) -> core.DataSource:
     return core.DataSource(
-        engine=str(profile["engine"]),
+        engine=core.normalize_engine(str(profile.get("db_type", profile.get("engine", "")))),
         host=str(profile["host"]),
         port=int(profile["port"]),
         database=str(profile["database"]),
@@ -130,7 +139,51 @@ def datasource_from_profile(profile_id: str, profile: dict[str, Any]) -> core.Da
         source=f"registry:{profile_id}",
         framework="registry",
         name=profile_id,
+        version=str(profile.get("version", "")),
+        version_parts=tuple(int(part) for part in profile.get("version_parts", [])),
+        version_status=str(profile.get("version_status", "not_probed")),
+        version_error=str(profile.get("version_error", "")),
+        connection_status=str(profile.get("connection_status", "unknown")),
+        version_checked_at=str(profile.get("version_checked_at", "")),
     )
+
+
+def probe_profile_fields(probe: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "version": str(probe.get("version", "")),
+        "version_parts": [int(part) for part in probe.get("version_parts", [])],
+        "version_status": str(probe.get("version_status", "not_probed")),
+        "version_error": str(probe.get("version_error", "")),
+        "connection_status": str(probe.get("connection_status", "unknown")),
+        "version_checked_at": str(probe.get("version_checked_at", "")),
+    }
+
+
+def datasource_result(
+    profile_id: str,
+    datasource: core.DataSource,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = core.model_datasource(datasource)
+    metadata["profile"] = profile_id
+    for key in (
+        "version", "version_parts", "version_status", "version_error",
+        "connection_status", "version_checked_at",
+    ):
+        if key in result:
+            metadata[key] = result[key]
+    return {"datasource": metadata, **result}
+
+
+def persist_probe(profile_id: str, probe: dict[str, Any]) -> None:
+    with lock_files(DATABASES_FILE):
+        config = databases_config()
+        profile = config["profiles"].get(profile_id)
+        if not profile:
+            return
+        profile.update(probe_profile_fields(probe))
+        config["profiles"][profile_id] = profile
+        save_databases(config)
 
 
 def discovery_args(root: Path) -> SimpleNamespace:
@@ -187,16 +240,19 @@ def sync_discovered(root: Path) -> tuple[list[dict[str, Any]], dict[str, Any], d
             alias = bind_alias(database_cfg, preferred_alias(item), profile_id)
             key = discovery_key(item, root)
             project_cfg["bindings"][key] = profile_id
+            saved_profile = database_cfg["profiles"][profile_id]
             rows.append({
                 "source": key,
                 "profile": profile_id,
                 "alias": alias,
-                "engine": item.engine,
-                "host": item.host,
-                "port": item.port,
-                "database": item.database,
-                "user": item.user,
+                "engine": saved_profile["engine"],
+                "db_type": saved_profile.get("db_type", saved_profile["engine"]),
+                "host": saved_profile["host"],
+                "port": saved_profile["port"],
+                "database": saved_profile["database"],
+                "user": saved_profile["user"],
                 "origin": item.source,
+                **probe_profile_fields(saved_profile),
             })
 
         save_databases(database_cfg)
@@ -228,8 +284,14 @@ def candidate_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "source": row["source"],
             "profile": row["profile"],
             "alias": row["alias"],
-            "db": f"{row['engine']} {row['database']}@{row['host']}:{row['port']}",
+            "db": f"{row['db_type']} {row['database']}@{row['host']}:{row['port']}",
+            "db_type": row["db_type"],
+            "engine": row["engine"],
             "user": row["user"],
+            "version": row.get("version", ""),
+            "version_parts": row.get("version_parts", []),
+            "version_status": row.get("version_status", "not_probed"),
+            "connection_status": row.get("connection_status", "unknown"),
         }
         for row in rows
     ]
@@ -290,7 +352,18 @@ def handle_use(args: argparse.Namespace) -> int:
             raise ValueError(f"unknown datasource: {args.source}")
         project_cfg["default_source"] = profile_id
         save_project(root, project_cfg)
-    print_json({"project": str(root), "default": profile_id, "aliases": aliases_for(database_cfg, profile_id)})
+    selected_profile = database_cfg["profiles"].get(profile_id, {})
+    print_json({
+        "project": str(root),
+        "default": profile_id,
+        "aliases": aliases_for(database_cfg, profile_id),
+        "db_type": selected_profile.get("db_type", selected_profile.get("engine", "")),
+        "engine": selected_profile.get("engine", ""),
+        "version": selected_profile.get("version", ""),
+        "version_parts": selected_profile.get("version_parts", []),
+        "version_status": selected_profile.get("version_status", "not_probed"),
+        "connection_status": selected_profile.get("connection_status", "unknown"),
+    })
     return 0
 
 
@@ -303,7 +376,7 @@ def manual_datasource(args: argparse.Namespace) -> core.DataSource:
         return core.DataSource(
             engine=engine,
             host=args.host or parsed["host"],
-            port=args.port or parsed["port"],
+            port=args.port or (parsed["port"] if not args.db_type else core.default_port(engine)),
             database=args.database or parsed["database"],
             user=args.user or parsed.get("user", ""),
             password=args.password if args.password is not None else parsed.get("password", ""),
@@ -340,7 +413,17 @@ def handle_source_add(args: argparse.Namespace) -> int:
         config["profiles"][profile_id] = profile_from_datasource(item, old)
         config["aliases"][args.alias] = profile_id
         save_databases(config)
-    print_json({"profile": profile_id, "alias": args.alias, "reused": old is not None})
+    print_json({
+        "profile": profile_id,
+        "alias": args.alias,
+        "db_type": item.engine,
+        "engine": item.engine,
+        "version": item.version,
+        "version_parts": list(item.version_parts),
+        "version_status": item.version_status,
+        "connection_status": item.connection_status,
+        "reused": old is not None,
+    })
     return 0
 
 
@@ -348,6 +431,7 @@ def source_view(profile_id: str, profile: dict[str, Any], config: dict[str, Any]
     return {
         "profile": profile_id,
         "aliases": aliases_for(config, profile_id),
+        "db_type": profile.get("db_type", profile["engine"]),
         "engine": profile["engine"],
         "host": profile["host"],
         "port": profile["port"],
@@ -355,6 +439,12 @@ def source_view(profile_id: str, profile: dict[str, Any], config: dict[str, Any]
         "user": profile["user"],
         "password": "***" if profile.get("password") else "",
         "origin": profile.get("origin", ""),
+        "version": profile.get("version", ""),
+        "version_parts": profile.get("version_parts", []),
+        "version_status": profile.get("version_status", "not_probed"),
+        "version_error": profile.get("version_error", ""),
+        "connection_status": profile.get("connection_status", "unknown"),
+        "version_checked_at": profile.get("version_checked_at", ""),
     }
 
 
@@ -370,6 +460,16 @@ def handle_source_show(args: argparse.Namespace) -> int:
     profile = config["profiles"].get(profile_id)
     if not profile:
         raise ValueError(f"unknown datasource: {args.source}")
+    datasource = datasource_from_profile(profile_id, profile)
+    probe = core.probe_datasource(datasource)
+    with lock_files(DATABASES_FILE):
+        config = databases_config()
+        stored = config["profiles"].get(profile_id)
+        if stored:
+            stored.update(probe_profile_fields(probe))
+            config["profiles"][profile_id] = stored
+            save_databases(config)
+            profile = stored
     print_json(source_view(profile_id, profile, config))
     return 0
 
@@ -401,6 +501,12 @@ def query_result(result: dict[str, Any], max_cell_chars: int) -> dict[str, Any]:
     }
     if model.get("cells_truncated"):
         payload["cells_truncated"] = True
+    for key in (
+        "version", "version_parts", "version_status", "version_error",
+        "connection_status", "version_checked_at",
+    ):
+        if key in result:
+            payload[key] = result[key]
     return payload
 
 
@@ -441,9 +547,12 @@ def operation_request(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "query":
         return {"sql": args.sql, "limit": args.limit}
     if args.command == "exec":
-        return {"sql": args.sql}
+        return {"sql": args.sql, "transaction": getattr(args, "transaction", "commit")}
     if args.command == "import":
-        return {"sql_file": str(Path(args.sql_file).expanduser().resolve())}
+        return {
+            "sql_file": str(Path(args.sql_file).expanduser().resolve()),
+            "transaction": getattr(args, "transaction", "commit"),
+        }
     if args.command == "export":
         return {
             "out_file": str(Path(args.out_file).expanduser().resolve()),
@@ -478,6 +587,8 @@ def handle_query(args: argparse.Namespace) -> int:
     profile_id, datasource = resolve_datasource(root, args.source)
     core.enforce_query_read_only(args.sql, False)
     result = query_result(core.run_query(datasource, args.sql, args.limit), args.max_cell_chars)
+    persist_probe(profile_id, result)
+    result = datasource_result(profile_id, datasource, result)
     save_operation_result(args, root, profile_id, result, True)
     print_query_result(result, args.json)
     return 0
@@ -486,7 +597,9 @@ def handle_query(args: argparse.Namespace) -> int:
 def handle_exec(args: argparse.Namespace) -> int:
     root = canonical_root(args.root)
     profile_id, datasource = resolve_datasource(root, args.source)
-    result = core.run_non_query(datasource, args.sql)
+    result = core.run_non_query(datasource, args.sql, getattr(args, "transaction", "commit"))
+    persist_probe(profile_id, result)
+    result = datasource_result(profile_id, datasource, result)
     save_operation_result(args, root, profile_id, result, True)
     print_json(result)
     return 0
@@ -498,7 +611,13 @@ def handle_import(args: argparse.Namespace) -> int:
     sql_file = Path(args.sql_file).expanduser().resolve()
     if not sql_file.is_file():
         raise FileNotFoundError(f"SQL file not found: {sql_file}")
-    result = core.run_non_query(datasource, sql_file.read_text(encoding="utf-8"))
+    result = core.run_non_query(
+        datasource,
+        sql_file.read_text(encoding="utf-8"),
+        getattr(args, "transaction", "commit"),
+    )
+    persist_probe(profile_id, result)
+    result = datasource_result(profile_id, datasource, result)
     save_operation_result(args, root, profile_id, result, True)
     print_json(result)
     return 0
@@ -517,6 +636,8 @@ def handle_export(args: argparse.Namespace) -> int:
         include_drop=args.include_drop,
     )
     result = core.run_export(datasource, export_args)
+    persist_probe(profile_id, result)
+    result = datasource_result(profile_id, datasource, result)
     save_operation_result(args, root, profile_id, result, True)
     print_json(result)
     return 0
@@ -594,11 +715,13 @@ def build_parser() -> argparse.ArgumentParser:
     execute = subparsers.add_parser("exec")
     execute.add_argument("sql")
     add_project_args(execute)
+    execute.add_argument("--transaction", choices=["commit", "rollback"], default="commit")
     execute.set_defaults(func=handle_exec)
 
     import_parser = subparsers.add_parser("import")
     import_parser.add_argument("sql_file")
     add_project_args(import_parser)
+    import_parser.add_argument("--transaction", choices=["commit", "rollback"], default="commit")
     import_parser.set_defaults(func=handle_import)
 
     export = subparsers.add_parser("export")
@@ -633,8 +756,9 @@ def main() -> int:
     except Exception as exc:
         if args.command in {"query", "exec", "import", "export"}:
             root = canonical_root(args.root)
-            save_operation_result(args, root, "", {"error": str(exc)}, False)
-        print_json({"error": str(exc)})
+            failure = {"error": str(exc), **getattr(exc, "details", {})}
+            save_operation_result(args, root, "", failure, False)
+        print_json({"error": str(exc), **getattr(exc, "details", {})})
         return 1
 
 

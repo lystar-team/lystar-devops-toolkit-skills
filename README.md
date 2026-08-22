@@ -4,8 +4,8 @@
 
 | Skill | 命令 | 能力 |
 | --- | --- | --- |
-| `lystar-ssh-ops` | `sshx` | SSH/SFTP、远程命令、长任务、服务器资料维护 |
-| `lystar-db-ops` | `dbx` | MySQL、MariaDB、PostgreSQL 数据源发现、查询、执行、导入导出 |
+| `lystar-ssh-ops` | `sshx` | SSH/SFTP、远程命令、长任务、任务取消/跟随、本地端口转发、服务器资料维护 |
+| `lystar-db-ops` | `dbx` | MySQL、MariaDB、PostgreSQL 数据源发现、版本探测、事务控制、查询、执行、导入导出 |
 
 支持 OpenCode、OpenAI Codex、Claude Code、Pi，以及其它兼容 Agent Skills `SKILL.md` 结构的 Harness。两个命令共用本地运行时，但 Skill 可以单独安装、单独更新。
 
@@ -150,7 +150,13 @@ sshx exec --json prod "systemctl status nginx --no-pager"
 sshx put prod ./local.conf /etc/example/local.conf
 sshx get prod /var/log/example.log ./example.log
 sshx run prod "long-running-command"
+sshx jobs prod
+sshx cancel prod <job_id>
 sshx wait prod <job_id>
+sshx wait prod <job_id> --follow
+sshx forward open prod 15432 db.internal 5432
+sshx forward list prod
+sshx forward close prod <forward_id>
 ```
 
 多级跳板机通过重复 `--jump` 配置。跳板 profile 可以继续引用更前一级跳板：
@@ -179,10 +185,12 @@ dbx sources
 dbx use <source>
 dbx query "SELECT 1"
 dbx query --json "SELECT id, name FROM users LIMIT 20"
-dbx exec "CREATE INDEX ..."
-dbx import backup.sql
+dbx exec "CREATE INDEX ..." --transaction commit
+dbx import backup.sql --transaction commit
 dbx export backup.sql
 ```
+
+`sshx` 的 `jobs`/`cancel`/`wait --follow` 复用远端长任务目录，`forward` 复用已有 SSH daemon 和多级跳板链。`dbx` 统一返回 `db_type`、版本与连接状态；`exec`、`import` 默认提交，使用 `--transaction rollback` 可在当前单次命令中执行后回滚，不建立跨命令持久事务会话。
 
 数据库写操作应由用户明确授权，执行后再用只读查询回查。
 

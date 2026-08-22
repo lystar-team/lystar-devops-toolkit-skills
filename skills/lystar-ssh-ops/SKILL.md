@@ -45,7 +45,14 @@ sshx put <别名> <本地路径> <远端路径>
 sshx get <别名> <远端路径> <本地路径>
 sshx run <别名> "<长任务命令>"
 sshx job <别名> <job_id>
+sshx jobs <别名>
+sshx cancel <别名> <job_id>
 sshx wait <别名> <job_id>
+sshx wait <别名> <job_id> --follow
+sshx forward open <别名> <本地端口> <远端主机> <远端端口>
+sshx forward list <别名>
+sshx forward status <别名> <forward_id>
+sshx forward close <别名> <forward_id>
 sshx status [别名]
 sshx close <别名>
 sshx forget <别名>
@@ -72,5 +79,8 @@ sshx server-3 "hostname"
 - 删除、覆盖、重启服务、安装脚本等远端写操作必须来自用户明确要求。
 - 变更前核验目标服务、配置路径、监听端口、依赖、进程和健康状态，准备备份、语法检查、回退命令和验证入口。
 - 长任务使用 `run`；日志优先用 `tail -n`、`journalctl -n --no-pager`、`rg` 或 `jq` 缩小结果。
+- `jobs` 按 SSH profile 列出远端任务，展示任务 ID、命令、状态、PID、创建/结束时间和 stdout/stderr 日志位置；`job` 继续查看单个任务的日志尾部。`cancel` 对运行中的任务发送终止信号，并把远端状态标记为 `cancelled`；已结束、已取消和不存在的任务返回稳定状态，不会重建第二套任务目录。
+- `wait --follow`（`job --follow` 也支持）按 stdout/stderr 文件偏移增量输出，状态变化使用 `# job=... state=...`，两个输出流分别使用 `# stdout` 和 `# stderr`；默认非 follow 模式仍一次性输出日志尾部。使用 `--json` 时 follow 输出为 JSON Lines 事件。
+- `forward open` 在当前 SSH daemon 和多级跳板链上创建本地端口转发；不传本地端口时使用系统分配的空闲端口。`forward list/status/close` 查看、查询和关闭转发。连接异常会记录在转发状态中，关闭 profile 时所有转发随 daemon 一起回收。
 - 上传前确认本地路径，下载后核对目标路径和返回的校验值。
 - 完成后报告目标别名、动作、退出码、关键输出和实际验证；服务器事实变化时同步 `servers/` 文档。
