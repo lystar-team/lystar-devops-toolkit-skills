@@ -153,11 +153,21 @@ sshx run prod "long-running-command"
 sshx wait prod <job_id>
 ```
 
-SSH 建连、认证、守护进程启动和普通远程命令默认超时为 120 秒：
+多级跳板机通过重复 `--jump` 配置。跳板 profile 可以继续引用更前一级跳板：
+
+```bash
+sshx open server-1 ops@bastion.example
+sshx open server-2 ops@10.0.0.2 --jump server-1
+sshx open server-3 root@10.0.0.3 --jump server-2
+sshx server-3 "hostname"
+```
+
+SSH 建连、认证、守护进程启动、同步远程操作和普通远程命令默认超时为 120 秒：
 
 ```bash
 sshx open prod root@example.com --timeout 180
 sshx exec prod --timeout 300 "slow-command"
+sshx run prod --timeout 300 "long-running-command"
 ```
 
 服务器资料由同一个 `lystar-ssh-ops` Skill 管理。资料入口位于 Skill 的 `servers/`，模板位于 `servers/_templates/`。

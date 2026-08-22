@@ -113,21 +113,90 @@ def save_config(config: dict[str, Any]) -> None:
     write_toml(CONFIG_FILE, config)
 
 
-def profile_identity(profile: dict[str, Any]) -> tuple[str, int, str]:
-    return str(profile["host"]), int(profile.get("port", DEFAULT_PORT)), str(profile["user"])
+def profile_jump_ids(profile: dict[str, Any]) -> tuple[str, ...]:
+    raw_jumps = profile.get("jump_profiles", [])
+    if raw_jumps is None:
+        return ()
+    if isinstance(raw_jumps, str):
+        raw_jumps = [raw_jumps]
+    if not isinstance(raw_jumps, list) or any(not isinstance(item, str) or not item for item in raw_jumps):
+        raise ValueError("jump_profiles must be a list of non-empty profile IDs")
+    return tuple(raw_jumps)
 
 
-def make_profile_id(host: str, port: int, user: str) -> str:
-    digest = hashlib.sha256(f"{host}\0{port}\0{user}".encode()).hexdigest()[:12]
+def profile_identity(profile: dict[str, Any]) -> tuple[str, int, str, tuple[str, ...]]:
+    return (
+        str(profile["host"]),
+        int(profile.get("port", DEFAULT_PORT)),
+        str(profile["user"]),
+        profile_jump_ids(profile),
+    )
+
+
+def make_profile_id(host: str, port: int, user: str, jump_ids: tuple[str, ...] = ()) -> str:
+    identity = f"{host}\0{port}\0{user}"
+    if jump_ids:
+        identity += "\0" + "\0".join(jump_ids)
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:12]
     return f"ssh_{digest}"
 
 
-def find_profile(config: dict[str, Any], host: str, port: int, user: str) -> str | None:
-    identity = (host, port, user)
+def find_profile(
+    config: dict[str, Any],
+    host: str,
+    port: int,
+    user: str,
+    jump_ids: tuple[str, ...] = (),
+) -> str | None:
+    identity = (host, port, user, jump_ids)
     for profile_id, profile in config["profiles"].items():
         if profile_identity(profile) == identity:
             return profile_id
     return None
+
+
+def resolve_jump_ids(config: dict[str, Any], aliases: list[str]) -> tuple[str, ...]:
+    jump_ids: list[str] = []
+    for alias in aliases:
+        profile_id = config["aliases"].get(alias)
+        if not profile_id or profile_id not in config["profiles"]:
+            raise ValueError(f"unknown SSH jump alias: {alias}; run sshx open first")
+        jump_ids.append(profile_id)
+    return tuple(jump_ids)
+
+
+def resolve_profile_chain(config: dict[str, Any], profile_id: str) -> list[str]:
+    chain: list[str] = []
+    active: list[str] = []
+
+    def visit(current_id: str) -> None:
+        if current_id in active:
+            cycle = " -> ".join([*active, current_id])
+            raise ValueError(f"SSH jump cycle detected: {cycle}")
+        if current_id in chain:
+            return
+        profile = config["profiles"].get(current_id)
+        if not profile:
+            raise ValueError(f"SSH profile no longer exists: {current_id}")
+        active.append(current_id)
+        for jump_id in profile_jump_ids(profile):
+            if jump_id not in config["profiles"]:
+                raise ValueError(f"SSH jump profile no longer exists: {jump_id}")
+            visit(jump_id)
+        active.pop()
+        chain.append(current_id)
+
+    visit(profile_id)
+    return chain
+
+
+def profile_aliases_or_id(config: dict[str, Any], profile_id: str) -> str:
+    aliases = aliases_for(config, profile_id)
+    return aliases[0] if aliases else profile_id
+
+
+def profile_jump_aliases(config: dict[str, Any], profile: dict[str, Any]) -> list[str]:
+    return [profile_aliases_or_id(config, jump_id) for jump_id in profile_jump_ids(profile)]
 
 
 def resolve_profile(alias: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
@@ -225,7 +294,11 @@ def parse_target(target: str, user: str | None, port: int | None) -> tuple[str, 
     return host, user, port or DEFAULT_PORT
 
 
-def connect_client(profile: dict[str, Any], timeout: int = DEFAULT_TIMEOUT) -> paramiko.SSHClient:
+def connect_client(
+    profile: dict[str, Any],
+    timeout: int = DEFAULT_TIMEOUT,
+    sock: Any | None = None,
+) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     try:
         client.load_system_host_keys()
@@ -244,6 +317,7 @@ def connect_client(profile: dict[str, Any], timeout: int = DEFAULT_TIMEOUT) -> p
         timeout=timeout,
         banner_timeout=timeout,
         auth_timeout=timeout,
+        sock=sock,
         look_for_keys=discover_keys,
         allow_agent=discover_keys,
     )
@@ -251,6 +325,60 @@ def connect_client(profile: dict[str, Any], timeout: int = DEFAULT_TIMEOUT) -> p
     if transport:
         transport.set_keepalive(30)
     return client
+
+
+def close_connection_chain(
+    clients: list[paramiko.SSHClient],
+    proxy_channels: list[paramiko.Channel],
+) -> None:
+    for client in reversed(clients):
+        try:
+            client.close()
+        except (OSError, EOFError, paramiko.SSHException):
+            pass
+    for channel in reversed(proxy_channels):
+        try:
+            channel.close()
+        except (OSError, EOFError, paramiko.SSHException):
+            pass
+
+
+def connect_profile_chain(
+    config: dict[str, Any],
+    profile_id: str,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> tuple[paramiko.SSHClient, list[paramiko.SSHClient], list[paramiko.Channel]]:
+    profile_ids = resolve_profile_chain(config, profile_id)
+    clients: list[paramiko.SSHClient] = []
+    proxy_channels: list[paramiko.Channel] = []
+    try:
+        for current_id in profile_ids:
+            profile = config["profiles"][current_id]
+            sock: Any | None = None
+            if clients:
+                previous_transport = clients[-1].get_transport()
+                if not previous_transport or not previous_transport.is_active():
+                    raise RuntimeError(f"SSH jump transport is unavailable before {current_id}")
+                sock = previous_transport.open_channel(
+                    "direct-tcpip",
+                    (str(profile["host"]), int(profile.get("port", DEFAULT_PORT))),
+                    ("127.0.0.1", 0),
+                    timeout=timeout,
+                )
+                proxy_channels.append(sock)
+            try:
+                client = connect_client(profile, timeout=timeout, sock=sock)
+            except Exception as exc:
+                label = profile_aliases_or_id(config, current_id)
+                raise RuntimeError(
+                    f"SSH connection failed at {label} "
+                    f"({profile['user']}@{profile['host']}:{profile.get('port', DEFAULT_PORT)}): {exc}"
+                ) from exc
+            clients.append(client)
+        return clients[-1], clients, proxy_channels
+    except Exception:
+        close_connection_chain(clients, proxy_channels)
+        raise
 
 
 def transport_connected(client: paramiko.SSHClient | None) -> bool:
@@ -351,13 +479,24 @@ def remote_is_dir(sftp: paramiko.SFTPClient, remote: str) -> bool:
         return False
 
 
-def sftp_put(client: paramiko.SSHClient, local_text: str, remote: str) -> dict[str, Any]:
+def open_sftp_session(client: paramiko.SSHClient, timeout: int) -> paramiko.SFTPClient:
+    sftp = client.open_sftp()
+    sftp.get_channel().settimeout(timeout)
+    return sftp
+
+
+def sftp_put(
+    client: paramiko.SSHClient,
+    local_text: str,
+    remote: str,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
     local = Path(local_text).expanduser().resolve()
     if not local.exists():
         raise FileNotFoundError(f"local path not found: {local}")
     files = 0
     bytes_count = 0
-    with client.open_sftp() as sftp:
+    with open_sftp_session(client, timeout) as sftp:
         if local.is_dir():
             for path in local.rglob("*"):
                 if not path.is_file():
@@ -386,11 +525,16 @@ def download_file(sftp: paramiko.SFTPClient, remote: str, local: Path) -> tuple[
     return 1, size
 
 
-def sftp_get(client: paramiko.SSHClient, remote: str, local_text: str) -> dict[str, Any]:
+def sftp_get(
+    client: paramiko.SSHClient,
+    remote: str,
+    local_text: str,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
     local = Path(local_text).expanduser().resolve()
     files = 0
     bytes_count = 0
-    with client.open_sftp() as sftp:
+    with open_sftp_session(client, timeout) as sftp:
         if remote_is_dir(sftp, remote):
             local.mkdir(parents=True, exist_ok=True)
             stack = [(remote, local)]
@@ -416,8 +560,12 @@ def sftp_get(client: paramiko.SSHClient, remote: str, local_text: str) -> dict[s
     return result
 
 
-def sftp_ls(client: paramiko.SSHClient, remote: str) -> dict[str, Any]:
-    with client.open_sftp() as sftp:
+def sftp_ls(
+    client: paramiko.SSHClient,
+    remote: str,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    with open_sftp_session(client, timeout) as sftp:
         entries = [
             {
                 "name": item.filename,
@@ -430,8 +578,13 @@ def sftp_ls(client: paramiko.SSHClient, remote: str) -> dict[str, Any]:
     return {"entries": entries}
 
 
-def sftp_cat(client: paramiko.SSHClient, remote: str, max_bytes: int) -> dict[str, Any]:
-    with client.open_sftp() as sftp:
+def sftp_cat(
+    client: paramiko.SSHClient,
+    remote: str,
+    max_bytes: int,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    with open_sftp_session(client, timeout) as sftp:
         with sftp.open(remote, "rb") as handle:
             data = handle.read(max_bytes + 1)
     content = data[:max_bytes].decode(errors="replace")
@@ -440,15 +593,19 @@ def sftp_cat(client: paramiko.SSHClient, remote: str, max_bytes: int) -> dict[st
     return {"content": content}
 
 
-def remote_home(client: paramiko.SSHClient) -> str:
-    with client.open_sftp() as sftp:
+def remote_home(client: paramiko.SSHClient, timeout: int = DEFAULT_TIMEOUT) -> str:
+    with open_sftp_session(client, timeout) as sftp:
         return sftp.normalize(".")
 
 
-def start_remote_job(client: paramiko.SSHClient, command: str) -> dict[str, Any]:
+def start_remote_job(
+    client: paramiko.SSHClient,
+    command: str,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
     job_id = dt.datetime.now(dt.UTC).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
-    job_dir = posixpath.join(remote_home(client), ".agent-ops", "jobs", job_id)
-    with client.open_sftp() as sftp:
+    job_dir = posixpath.join(remote_home(client, timeout), ".agent-ops", "jobs", job_id)
+    with open_sftp_session(client, timeout) as sftp:
         sftp_mkdirs(sftp, job_dir)
         command_path = posixpath.join(job_dir, "command.sh")
         launcher_path = posixpath.join(job_dir, "launcher.sh")
@@ -470,19 +627,29 @@ exit "$code"
         sftp.chmod(command_path, 0o700)
         sftp.chmod(launcher_path, 0o700)
     launcher = shlex.quote(posixpath.join(job_dir, "launcher.sh"))
-    launch = exec_command(client, f"nohup setsid /bin/sh {launcher} >/dev/null 2>&1 < /dev/null & echo $!", 20, 2000)
+    launch = exec_command(
+        client,
+        f"nohup setsid /bin/sh {launcher} >/dev/null 2>&1 < /dev/null & echo $!",
+        timeout,
+        2000,
+    )
     return {"job_id": job_id, "remote_dir": job_dir, "pid": launch.get("stdout", "").strip()}
 
 
-def remote_job_status(client: paramiko.SSHClient, job_id: str, tail: int) -> dict[str, Any]:
-    job_dir = posixpath.join(remote_home(client), ".agent-ops", "jobs", job_id)
+def remote_job_status(
+    client: paramiko.SSHClient,
+    job_id: str,
+    tail: int,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    job_dir = posixpath.join(remote_home(client, timeout), ".agent-ops", "jobs", job_id)
     quoted_dir = shlex.quote(job_dir)
     command = (
         f"cd {quoted_dir} && printf 'STATUS_JSON\\n'; cat status.json 2>/dev/null || true; "
         f"printf '\\nSTDOUT_TAIL\\n'; tail -n {int(tail)} stdout.log 2>/dev/null || true; "
         f"printf '\\nSTDERR_TAIL\\n'; tail -n {int(tail)} stderr.log 2>/dev/null || true"
     )
-    reply = exec_command(client, command, 20, 64_000)
+    reply = exec_command(client, command, timeout, 64_000)
     output = reply.get("stdout", "")
     status_text = ""
     stdout_tail = ""
@@ -505,9 +672,12 @@ def remote_job_status(client: paramiko.SSHClient, job_id: str, tail: int) -> dic
 
 
 class Daemon:
-    def __init__(self, profile_id: str):
+    def __init__(self, profile_id: str, timeout: int = DEFAULT_TIMEOUT):
         self.profile_id = profile_id
+        self.connection_timeout = timeout
         self.client: paramiko.SSHClient | None = None
+        self.clients: list[paramiko.SSHClient] = []
+        self.proxy_channels: list[paramiko.Channel] = []
         self.started_at = time.time()
         self.last_used = time.time()
         self.closed = threading.Event()
@@ -522,17 +692,30 @@ class Daemon:
             raise ValueError(f"SSH profile no longer exists: {self.profile_id}")
         return profile
 
+    def chain_connected(self) -> bool:
+        return bool(self.clients) and all(transport_connected(client) for client in self.clients)
+
+    def close_connection(self) -> None:
+        close_connection_chain(self.clients, self.proxy_channels)
+        self.client = None
+        self.clients = []
+        self.proxy_channels = []
+
     def ensure_connected(self) -> paramiko.SSHClient:
-        if transport_connected(self.client):
+        if self.chain_connected():
             assert self.client is not None
             return self.client
         with self.connect_lock:
-            if transport_connected(self.client):
+            if self.chain_connected():
                 assert self.client is not None
                 return self.client
-            if self.client:
-                self.client.close()
-            self.client = connect_client(self.profile())
+            self.close_connection()
+            config = load_config()
+            self.client, self.clients, self.proxy_channels = connect_profile_chain(
+                config,
+                self.profile_id,
+                timeout=self.connection_timeout,
+            )
             return self.client
 
     def status(self) -> dict[str, Any]:
@@ -544,6 +727,7 @@ class Daemon:
             "host": profile.get("host", ""),
             "port": profile.get("port", DEFAULT_PORT),
             "user": profile.get("user", ""),
+            "jumps": profile_jump_aliases(config, profile),
             "connected": transport_connected(self.client),
             "started_at": dt.datetime.fromtimestamp(self.started_at, dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "idle_seconds": int(time.time() - self.last_used),
@@ -559,25 +743,31 @@ class Daemon:
 
         client = self.ensure_connected()
         self.last_used = time.time()
+        operation_timeout = int(payload.get("timeout", DEFAULT_TIMEOUT))
         if action == "exec":
             return exec_command(
                 client,
                 payload["command"],
-                int(payload.get("timeout", DEFAULT_TIMEOUT)),
+                operation_timeout,
                 int(payload.get("max_bytes", 8000)),
             )
         if action == "run":
-            return start_remote_job(client, payload["command"])
+            return start_remote_job(client, payload["command"], operation_timeout)
         if action == "job":
-            return remote_job_status(client, payload["job_id"], int(payload.get("tail", 120)))
+            return remote_job_status(
+                client,
+                payload["job_id"],
+                int(payload.get("tail", 120)),
+                operation_timeout,
+            )
         if action == "put":
-            return sftp_put(client, payload["local"], payload["remote"])
+            return sftp_put(client, payload["local"], payload["remote"], operation_timeout)
         if action == "get":
-            return sftp_get(client, payload["remote"], payload["local"])
+            return sftp_get(client, payload["remote"], payload["local"], operation_timeout)
         if action == "ls":
-            return sftp_ls(client, payload["remote"])
+            return sftp_ls(client, payload["remote"], operation_timeout)
         if action == "cat":
-            return sftp_cat(client, payload["remote"], int(payload.get("max_bytes", 4000)))
+            return sftp_cat(client, payload["remote"], int(payload.get("max_bytes", 4000)), operation_timeout)
         raise ValueError(f"unknown action: {action}")
 
     def handle_connection(self, conn: socket.socket) -> None:
@@ -623,8 +813,7 @@ class Daemon:
             reason = str(exc)
             raise
         finally:
-            if self.client:
-                self.client.close()
+            self.close_connection()
             write_json(exit_path(self.profile_id), {"at": utc_now(), "reason": reason})
             for path in (self.sock_path, pid_path(self.profile_id), ready_path(self.profile_id)):
                 try:
@@ -637,11 +826,19 @@ class Daemon:
 def run_daemon(args: argparse.Namespace) -> int:
     ensure_dirs()
     try:
-        return Daemon(args.profile_id).serve(args.ready_file)
+        return Daemon(args.profile_id, args.timeout).serve(args.ready_file)
     except Exception as exc:
         write_json(Path(args.ready_file), {"ok": False, "error": str(exc)})
         write_json(exit_path(args.profile_id), {"at": utc_now(), "reason": str(exc)})
         return 1
+
+
+def daemon_ready_timeout(profile_id: str, timeout: int) -> int:
+    try:
+        hop_count = len(resolve_profile_chain(load_config(), profile_id))
+    except ValueError:
+        hop_count = 1
+    return max(timeout, timeout * hop_count)
 
 
 def start_daemon(profile_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
@@ -657,6 +854,7 @@ def start_daemon(profile_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict[str, A
     command = [
         sys.executable, str(SCRIPT), "daemon", "--profile-id", profile_id,
         "--ready-file", str(ready),
+        "--timeout", str(timeout),
     ]
     log = log_path(profile_id).open("ab")
     process = subprocess.Popen(
@@ -667,7 +865,7 @@ def start_daemon(profile_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict[str, A
         start_new_session=True,
     )
     log.close()
-    deadline = time.time() + timeout
+    deadline = time.time() + daemon_ready_timeout(profile_id, timeout)
     ready_payload: dict[str, Any] | None = None
     while time.time() < deadline:
         if ready.exists():
@@ -685,8 +883,8 @@ def start_daemon(profile_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict[str, A
     return {"started": True, "profile": profile_id}
 
 
-def ensure_daemon(profile_id: str) -> None:
-    result = start_daemon(profile_id)
+def ensure_daemon(profile_id: str, timeout: int = DEFAULT_TIMEOUT) -> None:
+    result = start_daemon(profile_id, timeout)
     if result.get("error"):
         raise RuntimeError(str(result["error"]))
 
@@ -697,7 +895,10 @@ def run_open(args: argparse.Namespace) -> int:
         raise ValueError("missing user; use user@host or --user")
     with lock_files(CONFIG_FILE):
         config = load_config()
-        profile_id = find_profile(config, host, port, user) or make_profile_id(host, port, user)
+        jump_ids = resolve_jump_ids(config, args.jump or [])
+        profile_id = find_profile(config, host, port, user, jump_ids) or make_profile_id(
+            host, port, user, jump_ids
+        )
         old_profile = config["profiles"].get(profile_id, {})
         password = args.password_option if args.password_option is not None else args.password
         profile = {
@@ -709,7 +910,10 @@ def run_open(args: argparse.Namespace) -> int:
             "created_at": old_profile.get("created_at", utc_now()),
             "updated_at": utc_now(),
         }
+        if jump_ids:
+            profile["jump_profiles"] = list(jump_ids)
         config["profiles"][profile_id] = profile
+        resolve_profile_chain(config, profile_id)
         config["aliases"][args.alias] = profile_id
         save_config(config)
         profile_aliases = aliases_for(config, profile_id)
@@ -723,6 +927,7 @@ def run_open(args: argparse.Namespace) -> int:
         "host": host,
         "port": port,
         "user": user,
+        "jumps": profile_jump_aliases(config, profile),
         "connected": True,
         "reused": not result.get("started", False),
     })
@@ -736,6 +941,7 @@ def status_row(profile_id: str, profile: dict[str, Any], config: dict[str, Any])
         "host": profile.get("host", ""),
         "port": profile.get("port", DEFAULT_PORT),
         "user": profile.get("user", ""),
+        "jumps": profile_jump_aliases(config, profile),
     }
     if not daemon_running(profile_id):
         base["connected"] = False
@@ -811,7 +1017,11 @@ def close_profile(profile_id: str) -> dict[str, Any]:
 def run_close(args: argparse.Namespace) -> int:
     config = load_config()
     if args.all:
-        profile_ids = sorted(config["profiles"])
+        profile_ids = sorted(
+            config["profiles"],
+            key=lambda profile_id: len(resolve_profile_chain(config, profile_id)),
+            reverse=True,
+        )
     elif args.alias:
         profile_id, _profile, _config = resolve_profile(args.alias)
         profile_ids = [profile_id]
@@ -827,6 +1037,14 @@ def run_forget(args: argparse.Namespace) -> int:
         config["aliases"].pop(args.alias, None)
         remaining = aliases_for(config, profile_id)
         if not remaining:
+            dependents = [
+                dependent_id
+                for dependent_id, profile in config["profiles"].items()
+                if dependent_id != profile_id and profile_id in profile_jump_ids(profile)
+            ]
+            if dependents:
+                labels = ", ".join(profile_aliases_or_id(config, item) for item in dependents)
+                raise ValueError(f"cannot forget SSH profile {profile_id}; used by jump profiles: {labels}")
             close_profile(profile_id)
             config["profiles"].pop(profile_id, None)
         save_config(config)
@@ -843,14 +1061,19 @@ def command_text(parts: list[str]) -> str:
     return text
 
 
-def send_alias_request(alias: str, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+def send_alias_request(
+    alias: str,
+    payload: dict[str, Any],
+    timeout: int,
+    connect_timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
     profile_id, _profile, _config = resolve_profile(alias)
-    ensure_daemon(profile_id)
+    ensure_daemon(profile_id, connect_timeout)
     try:
         return request(profile_id, payload, timeout=timeout)
     except (FileNotFoundError, ConnectionRefusedError):
         reap_stale()
-        ensure_daemon(profile_id)
+        ensure_daemon(profile_id, connect_timeout)
         return request(profile_id, payload, timeout=timeout)
 
 
@@ -975,24 +1198,40 @@ def run_exec_cli(args: argparse.Namespace) -> int:
         args.alias,
         {"action": "exec", "command": command, "timeout": args.timeout, "max_bytes": args.max_bytes},
         timeout=args.timeout + 5,
+        connect_timeout=args.timeout,
     )
     exit_code = 1 if result.get("error") else int(result.get("exit_code", 0))
     return finish_operation(args, result, exit_code)
 
 
 def run_run_cli(args: argparse.Namespace) -> int:
-    result = send_alias_request(args.alias, {"action": "run", "command": command_text(args.command)}, timeout=25)
+    result = send_alias_request(
+        args.alias,
+        {"action": "run", "command": command_text(args.command), "timeout": args.timeout},
+        timeout=args.timeout + 5,
+        connect_timeout=args.timeout,
+    )
     return finish_operation(args, result, 1 if result.get("error") else 0)
 
 
 def run_job_cli(args: argparse.Namespace) -> int:
-    result = send_alias_request(args.alias, {"action": "job", "job_id": args.job_id, "tail": args.tail}, timeout=30)
+    result = send_alias_request(
+        args.alias,
+        {"action": "job", "job_id": args.job_id, "tail": args.tail, "timeout": args.timeout},
+        timeout=args.timeout + 5,
+        connect_timeout=args.timeout,
+    )
     return finish_operation(args, result, 1 if result.get("error") else 0)
 
 
 def run_wait_cli(args: argparse.Namespace) -> int:
     while True:
-        result = send_alias_request(args.alias, {"action": "job", "job_id": args.job_id, "tail": args.tail}, timeout=30)
+        result = send_alias_request(
+            args.alias,
+            {"action": "job", "job_id": args.job_id, "tail": args.tail, "timeout": args.timeout},
+            timeout=args.timeout + 5,
+            connect_timeout=args.timeout,
+        )
         if result.get("error"):
             return finish_operation(args, result, 1)
         status_payload = result.get("status", {})
@@ -1006,7 +1245,13 @@ def run_simple_request(args: argparse.Namespace) -> int:
     for name in ("local", "remote", "max_bytes"):
         if hasattr(args, name):
             payload[name] = getattr(args, name)
-    result = send_alias_request(args.alias, payload, timeout=60)
+    payload["timeout"] = args.timeout
+    result = send_alias_request(
+        args.alias,
+        payload,
+        timeout=args.timeout + 5,
+        connect_timeout=args.timeout,
+    )
     return finish_operation(args, result, 1 if result.get("error") else 0)
 
 
@@ -1042,6 +1287,7 @@ def build_parser() -> argparse.ArgumentParser:
     open_parser.add_argument("--port", type=int)
     open_parser.add_argument("--key")
     open_parser.add_argument("--password", dest="password_option")
+    open_parser.add_argument("--jump", action="append", default=[], metavar="ALIAS")
     open_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     open_parser.set_defaults(func=run_open)
 
@@ -1072,6 +1318,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("alias")
+    run_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     add_json_arg(run_parser)
     run_parser.add_argument("command", nargs=argparse.REMAINDER)
     run_parser.set_defaults(func=run_run_cli)
@@ -1080,6 +1327,7 @@ def build_parser() -> argparse.ArgumentParser:
     job_parser.add_argument("alias")
     job_parser.add_argument("job_id")
     job_parser.add_argument("--tail", type=int, default=120)
+    job_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     add_json_arg(job_parser)
     job_parser.set_defaults(func=run_job_cli)
 
@@ -1088,6 +1336,7 @@ def build_parser() -> argparse.ArgumentParser:
     wait_parser.add_argument("job_id")
     wait_parser.add_argument("--tail", type=int, default=120)
     wait_parser.add_argument("--interval", type=int, default=5)
+    wait_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     add_json_arg(wait_parser)
     wait_parser.set_defaults(func=run_wait_cli)
 
@@ -1095,6 +1344,7 @@ def build_parser() -> argparse.ArgumentParser:
     put_parser.add_argument("alias")
     put_parser.add_argument("local")
     put_parser.add_argument("remote")
+    put_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     add_json_arg(put_parser)
     put_parser.set_defaults(func=run_simple_request)
 
@@ -1102,12 +1352,14 @@ def build_parser() -> argparse.ArgumentParser:
     get_parser.add_argument("alias")
     get_parser.add_argument("remote")
     get_parser.add_argument("local")
+    get_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     add_json_arg(get_parser)
     get_parser.set_defaults(func=run_simple_request)
 
     ls_parser = subparsers.add_parser("ls")
     ls_parser.add_argument("alias")
     ls_parser.add_argument("remote")
+    ls_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     add_json_arg(ls_parser)
     ls_parser.set_defaults(func=run_simple_request)
 
@@ -1115,6 +1367,7 @@ def build_parser() -> argparse.ArgumentParser:
     cat_parser.add_argument("alias")
     cat_parser.add_argument("remote")
     cat_parser.add_argument("--max-bytes", type=int, default=4000)
+    cat_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     add_json_arg(cat_parser)
     cat_parser.set_defaults(func=run_simple_request)
 
@@ -1129,6 +1382,7 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_parser = subparsers.add_parser("daemon")
     daemon_parser.add_argument("--profile-id", required=True)
     daemon_parser.add_argument("--ready-file", required=True)
+    daemon_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     daemon_parser.set_defaults(func=run_daemon)
     return parser
 

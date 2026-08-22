@@ -36,6 +36,7 @@ lystar-skill-update update lystar-ssh-ops
 
 ```bash
 sshx open <别名> <user@host[:port]> [密码]
+sshx open <别名> <user@host[:port]> [密码] --jump <跳板别名> [--jump <更前一级跳板别名>]
 sshx <别名> "<命令>"
 sshx exec --json <别名> "<命令>"
 sshx ls <别名> <远端目录>
@@ -51,7 +52,18 @@ sshx forget <别名>
 sshx last [--summary|--json|--clear]
 ```
 
-SSH 建连和普通远程命令默认超时均为 120 秒，可用 `--timeout` 覆盖。普通命令会按已保存 profile 自动建立或恢复连接；同一 `host + port + user` 的别名共用连接。
+SSH 建连、同步远程操作和普通远程命令默认超时均为 120 秒，可用 `--timeout` 覆盖。普通命令会按已保存 profile 自动建立或恢复连接；同一 `host + port + user + 跳板链` 的别名共用连接。
+
+跳板机支持多级。每一级跳板先用 `sshx open` 保存自己的凭据，再通过 `--jump` 绑定；跳板别名可以继续带自己的 `--jump`：
+
+```bash
+sshx open server-1 ops@bastion.example
+sshx open server-2 ops@10.0.0.2 --jump server-1
+sshx open server-3 root@10.0.0.3 --jump server-2
+sshx server-3 "hostname"
+```
+
+上例的实际链路是本机 → `server-1` → `server-2` → `server-3`。跳板机只转发 SSH 通道，命令和 SFTP 操作仍在最终目标机执行；每一跳必须允许 SSH TCP 转发，并能访问下一跳的 SSH 端口。
 
 ## 执行规则
 

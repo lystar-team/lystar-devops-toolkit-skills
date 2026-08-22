@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import io
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -12,6 +14,7 @@ import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -28,6 +31,8 @@ import db_ops
 import paramiko
 import result_store
 import ssh_ops
+
+logging.getLogger("paramiko.transport").setLevel(logging.CRITICAL)
 
 
 class ConfigStoreTest(unittest.TestCase):
@@ -285,6 +290,12 @@ class SshOutputTest(unittest.TestCase):
         parser = ssh_ops.build_parser()
         self.assertEqual(parser.parse_args(["open", "prod", "root@example.com"]).timeout, 120)
         self.assertEqual(parser.parse_args(["exec", "prod", "true"]).timeout, 120)
+        self.assertEqual(
+            parser.parse_args(["open", "prod", "root@example.com", "--jump", "bastion", "--jump", "inner"]).jump,
+            ["bastion", "inner"],
+        )
+        self.assertEqual(parser.parse_args(["run", "prod", "true"]).timeout, 120)
+        self.assertEqual(parser.parse_args(["job", "prod", "job-1"]).timeout, 120)
         self.assertEqual(ssh_ops.DEFAULT_TIMEOUT, 120)
 
     def test_exec_uses_native_streams(self) -> None:
@@ -338,6 +349,140 @@ class SshOutputTest(unittest.TestCase):
         )
 
 
+class SshProfileChainTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = {
+            "profiles": {
+                "jump-1": {"host": "jump-1", "port": 22, "user": "tester"},
+                "jump-2": {"host": "jump-2", "port": 22, "user": "tester", "jump_profiles": ["jump-1"]},
+                "target": {"host": "target", "port": 22, "user": "tester", "jump_profiles": ["jump-2"]},
+            },
+            "aliases": {"one": "jump-1", "two": "jump-2", "target": "target"},
+        }
+
+    def test_recursive_chain_is_ordered_from_first_jump_to_target(self) -> None:
+        self.assertEqual(
+            ssh_ops.resolve_profile_chain(self.config, "target"),
+            ["jump-1", "jump-2", "target"],
+        )
+
+    def test_jump_cycle_is_rejected(self) -> None:
+        self.config["profiles"]["jump-1"]["jump_profiles"] = ["target"]
+        with self.assertRaisesRegex(ValueError, "SSH jump cycle detected"):
+            ssh_ops.resolve_profile_chain(self.config, "target")
+
+    def test_jump_profile_cannot_be_forgotten_while_referenced(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_config_file = ssh_ops.CONFIG_FILE
+            ssh_ops.CONFIG_FILE = Path(temp) / "ssh.toml"
+            try:
+                config_store.write_toml(ssh_ops.CONFIG_FILE, {
+                    "profiles": {
+                        "jump-1": self.config["profiles"]["jump-1"],
+                        "target": {
+                            **self.config["profiles"]["target"],
+                            "jump_profiles": ["jump-1"],
+                        },
+                    },
+                    "aliases": {"one": "jump-1", "target": "target"},
+                })
+                with self.assertRaisesRegex(ValueError, "used by jump profiles"):
+                    ssh_ops.run_forget(argparse.Namespace(alias="one"))
+                saved = config_store.load_toml(ssh_ops.CONFIG_FILE)
+                self.assertIn("one", saved["aliases"])
+            finally:
+                ssh_ops.CONFIG_FILE = old_config_file
+
+    def test_connection_chain_uses_each_previous_transport_as_next_socket(self) -> None:
+        class FakeChannel:
+            def __init__(self, name: str):
+                self.name = name
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        class FakeTransport:
+            def __init__(self, name: str):
+                self.name = name
+                self.channels: list[FakeChannel] = []
+
+            def is_active(self) -> bool:
+                return True
+
+            def open_channel(self, _kind: str, destination: tuple[str, int], _source: tuple[str, int], timeout: int) -> FakeChannel:
+                channel = FakeChannel(f"{self.name}->{destination[0]}:{destination[1]}:{timeout}")
+                self.channels.append(channel)
+                return channel
+
+        class FakeClient:
+            def __init__(self, name: str):
+                self.name = name
+                self.transport = FakeTransport(name)
+                self.closed = False
+
+            def get_transport(self) -> FakeTransport:
+                return self.transport
+
+            def close(self) -> None:
+                self.closed = True
+
+        clients: list[FakeClient] = []
+        calls: list[tuple[str, int, object | None]] = []
+
+        def fake_connect(profile: dict[str, object], timeout: int, sock: object | None = None) -> FakeClient:
+            calls.append((str(profile["host"]), timeout, sock))
+            client = FakeClient(str(profile["host"]))
+            clients.append(client)
+            return client
+
+        with patch.object(ssh_ops, "connect_client", side_effect=fake_connect):
+            target, connected, channels = ssh_ops.connect_profile_chain(self.config, "target", timeout=7)
+
+        self.assertIs(target, clients[-1])
+        self.assertEqual(connected, clients)
+        self.assertEqual([call[0] for call in calls], ["jump-1", "jump-2", "target"])
+        self.assertEqual([call[1] for call in calls], [7, 7, 7])
+        self.assertIsNone(calls[0][2])
+        self.assertIs(calls[1][2], channels[0])
+        self.assertIs(calls[2][2], channels[1])
+
+    def test_connection_failure_closes_already_opened_chain(self) -> None:
+        class FakeChannel:
+            def close(self) -> None:
+                pass
+
+        class FakeTransport:
+            def is_active(self) -> bool:
+                return True
+
+            def open_channel(self, *_args, **_kwargs) -> FakeChannel:
+                return FakeChannel()
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.transport = FakeTransport()
+                self.closed = False
+
+            def get_transport(self):
+                return self.transport
+
+            def close(self) -> None:
+                self.closed = True
+
+        first = FakeClient()
+
+        def fake_connect(profile: dict[str, object], timeout: int, sock: object | None = None):
+            if profile["host"] == "jump-1":
+                return first
+            raise OSError("auth failed")
+
+        with patch.object(ssh_ops, "connect_client", side_effect=fake_connect):
+            with self.assertRaisesRegex(RuntimeError, "connection failed at two"):
+                ssh_ops.connect_profile_chain(self.config, "target", timeout=7)
+        self.assertTrue(first.closed)
+
+
 class MockSshServer(paramiko.ServerInterface):
     def check_auth_password(self, username: str, password: str) -> int:
         return paramiko.AUTH_SUCCESSFUL if (username, password) == ("tester", "plain-password") else paramiko.AUTH_FAILED
@@ -380,16 +525,32 @@ class MockSshServer(paramiko.ServerInterface):
         return True
 
 
-class MockSshService:
+class ForwardingMockSshServer(MockSshServer):
     def __init__(self) -> None:
+        self.direct_destinations: dict[int, tuple[str, int]] = {}
+
+    def check_channel_direct_tcpip_request(
+        self,
+        chanid: int,
+        _origin: tuple[str, int],
+        destination: tuple[str, int],
+    ) -> int:
+        self.direct_destinations[chanid] = destination
+        return paramiko.OPEN_SUCCEEDED
+
+
+class MockSshService:
+    def __init__(self, forwarding: bool = False) -> None:
         self.listener = socket.socket()
         self.listener.bind(("127.0.0.1", 0))
         self.listener.listen(1)
         self.listener.settimeout(0.2)
         self.port = self.listener.getsockname()[1]
+        self.forwarding = forwarding
         self.stop_event = threading.Event()
         self.transports: list[paramiko.Transport] = []
         self.channels: list[paramiko.Channel] = []
+        self.transport_threads: list[threading.Thread] = []
         self.thread = threading.Thread(target=self.run, daemon=True)
 
     def start(self) -> None:
@@ -406,12 +567,63 @@ class MockSshService:
                 break
             transport = paramiko.Transport(client)
             self.transports.append(transport)
+            worker = threading.Thread(target=self.handle_transport, args=(transport, host_key), daemon=True)
+            self.transport_threads.append(worker)
+            worker.start()
+
+    def handle_transport(self, transport: paramiko.Transport, host_key: paramiko.RSAKey) -> None:
+        server = ForwardingMockSshServer() if self.forwarding else MockSshServer()
+        try:
             transport.add_server_key(host_key)
-            transport.start_server(server=MockSshServer())
+            transport.start_server(server=server)
             while transport.is_active() and not self.stop_event.is_set():
                 channel = transport.accept(0.2)
                 if channel is not None:
                     self.channels.append(channel)
+                    if isinstance(server, ForwardingMockSshServer):
+                        destination = server.direct_destinations.get(channel.chanid)
+                        if destination:
+                            threading.Thread(
+                                target=self.bridge_channel,
+                                args=(channel, destination),
+                                daemon=True,
+                            ).start()
+        finally:
+            transport.close()
+
+    @staticmethod
+    def bridge_channel(channel: paramiko.Channel, destination: tuple[str, int]) -> None:
+        try:
+            downstream = socket.create_connection(destination, timeout=5)
+        except OSError:
+            channel.close()
+            return
+
+        def forward(source, target) -> None:
+            try:
+                while True:
+                    data = source.recv(64 * 1024)
+                    if not data:
+                        break
+                    target.sendall(data)
+            except (OSError, EOFError, socket.timeout):
+                pass
+
+        upstream = threading.Thread(target=forward, args=(channel, downstream), daemon=True)
+        downstream_thread = threading.Thread(target=forward, args=(downstream, channel), daemon=True)
+        upstream.start()
+        downstream_thread.start()
+        upstream.join()
+        try:
+            channel.close()
+        except (OSError, EOFError):
+            pass
+        try:
+            downstream.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        downstream.close()
+        downstream_thread.join(timeout=1)
 
     def close(self) -> None:
         self.stop_event.set()
@@ -421,6 +633,8 @@ class MockSshService:
             transport.close()
         self.listener.close()
         self.thread.join(timeout=2)
+        for worker in self.transport_threads:
+            worker.join(timeout=2)
 
 
 class SshIntegrationTest(unittest.TestCase):
@@ -504,6 +718,64 @@ class SshIntegrationTest(unittest.TestCase):
             finally:
                 run("close", "local")
                 service.close()
+
+
+class SshJumpIntegrationTest(unittest.TestCase):
+    def test_three_hop_chain_executes_on_final_server(self) -> None:
+        services = [
+            MockSshService(forwarding=True),
+            MockSshService(forwarding=True),
+            MockSshService(),
+        ]
+        for service in services:
+            service.start()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {
+                **os.environ,
+                "XDG_DATA_HOME": str(REPO_ROOT / "runtime"),
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_STATE_HOME": str(root / "state"),
+                "XDG_RUNTIME_DIR": str(root / "runtime"),
+                "LYSTAR_SKILL_AUTO_UPDATE": "0",
+                "PI_SESSION_ID": "ssh-jump-integration",
+            }
+            sshx = str(BIN_DIR / "sshx")
+
+            def run(*args: str, timeout: int = 20) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sshx, *args], env=env, cwd=root, text=True,
+                    capture_output=True, timeout=timeout,
+                )
+
+            try:
+                opened_one = run("open", "server-1", f"tester@127.0.0.1:{services[0].port}", "plain-password")
+                self.assertEqual(opened_one.returncode, 0, opened_one.stderr + opened_one.stdout)
+                opened_two = run(
+                    "open", "server-2", f"tester@127.0.0.1:{services[1].port}",
+                    "plain-password", "--jump", "server-1",
+                )
+                self.assertEqual(opened_two.returncode, 0, opened_two.stderr + opened_two.stdout)
+                opened_three = run(
+                    "open", "server-3", f"tester@127.0.0.1:{services[2].port}",
+                    "plain-password", "--jump", "server-2",
+                )
+                self.assertEqual(opened_three.returncode, 0, opened_three.stderr + opened_three.stdout)
+
+                executed = run("server-3", "echo through-jumps")
+                self.assertEqual(executed.returncode, 0, executed.stderr + executed.stdout)
+                self.assertEqual(executed.stdout, "ran:echo through-jumps\n")
+                self.assertEqual(executed.stderr, "")
+
+                status = run("status", "--json", "server-3")
+                self.assertEqual(status.returncode, 0, status.stderr + status.stdout)
+                status_payload = json.loads(status.stdout)["connections"][0]
+                self.assertTrue(status_payload["connected"])
+                self.assertEqual(status_payload["jumps"], ["server-2"])
+            finally:
+                run("close", "--all")
+                for service in reversed(services):
+                    service.close()
 
 
 class SshReapTest(unittest.TestCase):

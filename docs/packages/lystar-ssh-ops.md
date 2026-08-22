@@ -17,7 +17,16 @@
 ./install.sh --server-home /private/server-list
 ```
 
-需要 Unix 兼容系统、Python 3.11+ 和联网安装 Paramiko。SSH 建连和普通远程命令默认超时为 120 秒。
+需要 Unix 兼容系统、Python 3.11+ 和联网安装 Paramiko。SSH 建连、同步远程操作和普通远程命令默认超时为 120 秒。
+
+多级跳板机通过 `--jump` 绑定，跳板别名可以递归引用更前一级跳板：
+
+```bash
+sshx open server-1 ops@bastion.example
+sshx open server-2 ops@10.0.0.2 --jump server-1
+sshx open server-3 root@10.0.0.3 --jump server-2
+sshx server-3 "hostname"
+```
 
 ## 更新
 
