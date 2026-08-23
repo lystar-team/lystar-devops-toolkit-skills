@@ -7,7 +7,7 @@ parse_install_args "$@"
 
 require_python
 install_python_dependencies "$root/requirements/lystar-db-ops.txt"
-install_runtime_scripts config_store.py result_store.py db_core.py db_ops.py
+install_runtime_scripts config_store.py registry_store.py result_store.py db_core.py db_ops.py
 install_command dbx
 install_update_tool
 install_regular_skill lystar-db-ops

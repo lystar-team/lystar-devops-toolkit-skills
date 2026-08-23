@@ -14,14 +14,23 @@ from types import SimpleNamespace
 from typing import Any
 
 import db_core as core
+import registry_store
 import result_store
-from config_store import load_toml, lock_files, write_toml
+from config_store import FileTransaction, load_toml, lock_files, write_toml
 
 
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 CONFIG_DIR = CONFIG_HOME / "agent-ops"
 DATABASES_FILE = CONFIG_DIR / "databases.toml"
 PROJECTS_DIR = CONFIG_DIR / "projects"
+
+
+class RegistryReferenceError(ValueError):
+    """删除数据库 source/profile 前发现注册表或项目绑定依赖。"""
+
+    def __init__(self, message: str, details: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.details = details
 
 
 def print_json(payload: dict[str, Any]) -> None:
@@ -59,6 +68,136 @@ def project_config(root: Path) -> dict[str, Any]:
 def save_project(root: Path, config: dict[str, Any]) -> None:
     config["project_root"] = str(root)
     write_toml(project_path(root), config)
+
+
+def db_registry() -> registry_store.RegistryStore:
+    registry_file = os.environ.get("DBX_REGISTRY_FILE") or str(DATABASES_FILE.with_name("ops.toml"))
+    revision_dir = os.environ.get("DBX_REGISTRY_REVISION_DIR") or None
+    return registry_store.RegistryStore(registry_file=registry_file, revision_dir=revision_dir)
+
+
+def project_source_impacts(profile_id: str) -> list[dict[str, Any]]:
+    impacts: list[dict[str, Any]] = []
+    if not PROJECTS_DIR.exists():
+        return impacts
+    for path in sorted(PROJECTS_DIR.glob("*.toml")):
+        try:
+            config = load_toml(path)
+        except (OSError, ValueError):
+            continue
+        bindings = config.get("bindings", {})
+        matching_bindings = sorted(
+            str(key) for key, value in bindings.items() if str(value) == profile_id
+        ) if isinstance(bindings, dict) else []
+        default_source = str(config.get("default_source") or "")
+        if default_source == profile_id or matching_bindings:
+            impacts.append({
+                "path": str(path),
+                "project_root": str(config.get("project_root") or ""),
+                "default_source": default_source,
+                "bindings": matching_bindings,
+            })
+    return impacts
+
+
+def clear_project_source_impacts(profile_id: str, impacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cleared: list[dict[str, Any]] = []
+    for impact in impacts:
+        path = Path(str(impact.get("path") or ""))
+        if not str(path):
+            continue
+        config = load_toml(path)
+        changed = False
+        if str(config.get("default_source") or "") == profile_id:
+            config["default_source"] = ""
+            changed = True
+        bindings = config.get("bindings")
+        if isinstance(bindings, dict):
+            removed = [key for key, value in bindings.items() if str(value) == profile_id]
+            for key in removed:
+                del bindings[key]
+            changed = changed or bool(removed)
+        if changed:
+            write_toml(path, config)
+            cleared.append({
+                "path": str(path),
+                "project_root": str(config.get("project_root") or ""),
+            })
+    return cleared
+
+
+def reconcile_db_registry(
+    source: str,
+    profile_id: str,
+    removed_aliases: list[str],
+    remaining_aliases: list[str],
+    confirm: bool,
+    document: dict[str, Any],
+    project_impacts: list[dict[str, Any]],
+) -> tuple[dict[str, Any], bool]:
+    removing_profile = not remaining_aliases
+    impact = registry_store.reference_impact(
+        document,
+        db_sources=set(removed_aliases) | {source},
+        db_profiles={profile_id} if removing_profile else set(),
+    )
+    if not removing_profile:
+        project_impacts = []
+    result: dict[str, Any] = {
+        "target": {
+            "kind": "db_profile" if removing_profile else "db_source",
+            "source": source,
+            "profile": profile_id,
+            "removed_aliases": removed_aliases,
+            "remaining_aliases": remaining_aliases,
+        },
+        "impact": {
+            **impact,
+            "project_bindings": project_impacts,
+        },
+        "synced": [],
+        "orphaned": [],
+        "project_bindings_cleared": [],
+        "confirmation_required": False,
+        "registry_revision": document.get("revision", 0),
+    }
+    has_impact = impact["has_references"] or bool(project_impacts)
+    if not has_impact:
+        result["status"] = "ready"
+        return result, False
+
+    if not removing_profile:
+        replacement = sorted(remaining_aliases)[0]
+        changes = registry_store.synchronize_references(
+            document,
+            {alias: replacement for alias in removed_aliases},
+            {
+                "deployments": ("db_source", "db_sources"),
+                "backup_assets": ("db_source",),
+                "relations": ("source_id", "target_id"),
+            },
+        )
+        result["status"] = "synced"
+        result["synced"] = changes
+        return result, bool(changes)
+
+    if not confirm:
+        result["status"] = "blocked"
+        result["confirmation_required"] = True
+        result["confirmation_hint"] = "dbx source remove --confirm <source>"
+        raise RegistryReferenceError(
+            f"cannot remove database profile {profile_id}; references exist",
+            result,
+        )
+
+    marked = registry_store.mark_references_orphaned(
+        document,
+        impact,
+        f"Database profile removed: {profile_id}",
+    )
+    result["status"] = "orphaned" if marked or project_impacts else "removed"
+    result["orphaned"] = marked
+    return result, bool(marked)
 
 
 def datasource_identity(item: core.DataSource | dict[str, Any]) -> tuple[str, str, int, str, str]:
@@ -475,20 +614,54 @@ def handle_source_show(args: argparse.Namespace) -> int:
 
 
 def handle_source_remove(args: argparse.Namespace) -> int:
-    with lock_files(DATABASES_FILE):
+    store = db_registry()
+    transaction_paths = [DATABASES_FILE, store.registry_file, *PROJECTS_DIR.glob("*.toml")]
+    with FileTransaction(
+        transaction_paths,
+        glob_paths=((store.revision_dir, "revision-*.toml"),),
+    ) as transaction:
         config = databases_config()
-        profile_id = config["aliases"].pop(args.source, None)
-        if not profile_id and args.source in config["profiles"]:
+        profile_id = config["aliases"].get(args.source)
+        removed_aliases: list[str] = []
+        if profile_id:
+            removed_aliases = [args.source]
+        elif args.source in config["profiles"]:
             profile_id = args.source
-            for alias in aliases_for(config, profile_id):
-                config["aliases"].pop(alias, None)
+            removed_aliases = aliases_for(config, profile_id)
         if not profile_id:
             raise ValueError(f"unknown datasource: {args.source}")
-        remaining = aliases_for(config, profile_id)
+        all_aliases = aliases_for(config, profile_id)
+        remaining = [alias for alias in all_aliases if alias not in removed_aliases]
+        document = store.load_locked()
+        project_impacts = project_source_impacts(profile_id) if not remaining else []
+        registry_result, registry_changed = reconcile_db_registry(
+            args.source,
+            profile_id,
+            removed_aliases,
+            remaining,
+            bool(getattr(args, "confirm", False)),
+            document,
+            project_impacts,
+        )
+        for alias in removed_aliases:
+            config["aliases"].pop(alias, None)
         if not remaining:
             config["profiles"].pop(profile_id, None)
+        registry_result["project_bindings_cleared"] = clear_project_source_impacts(
+            profile_id,
+            project_impacts,
+        )
         save_databases(config)
-    print_json({"removed": args.source, "profile": profile_id, "remaining_aliases": remaining})
+        if registry_changed:
+            committed = store.save_locked(document)
+            registry_result["registry_revision"] = committed.get("revision", 0)
+        transaction.commit()
+    print_json({
+        "removed": args.source,
+        "profile": profile_id,
+        "remaining_aliases": remaining,
+        "registry": registry_result,
+    })
     return 0
 
 
@@ -702,6 +875,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     source_remove = source_commands.add_parser("remove")
     source_remove.add_argument("source")
+    source_remove.add_argument(
+        "--confirm",
+        action="store_true",
+        help="确认删除最后一个 alias/profile，并将注册表依赖标记为 orphaned",
+    )
+    source_remove.add_argument("--json", action="store_true", help="Return the structured JSON result")
     source_remove.set_defaults(func=handle_source_remove)
 
     query = subparsers.add_parser("query")

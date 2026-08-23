@@ -1,0 +1,1 @@
+# hostx 通过现有 sshx CLI 工作，不新增 Python 第三方依赖。

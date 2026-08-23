@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
+if [ "${LYSTAR_SKILL_AUTO_UPDATE:-1}" != "0" ] && [ -z "${LYSTAR_SKILL_UPDATE:-}" ] && [ -f "$data_home/agent-ops/scripts/skill_update.py" ]; then
+    "${PYTHON_BIN:-python3}" "$data_home/agent-ops/scripts/skill_update.py" auto lystar-deploy-ops --quiet >/dev/null 2>&1 || true
+fi
+PYTHONPATH="$data_home/agent-ops/vendor${PYTHONPATH:+:$PYTHONPATH}" \
+    exec "${PYTHON_BIN:-python3}" "$data_home/agent-ops/scripts/deploy_ops.py" "$@"

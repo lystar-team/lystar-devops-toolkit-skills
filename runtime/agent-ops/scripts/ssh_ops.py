@@ -24,8 +24,9 @@ from typing import Any
 
 import paramiko
 
+import registry_store
 import result_store
-from config_store import load_toml, lock_files, write_toml
+from config_store import FileTransaction, load_toml, lock_files, write_toml
 
 
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -36,6 +37,7 @@ RUN_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", BASE_DIR / "run")) / "agent-ops
 SCRIPT = Path(__file__).resolve()
 DEFAULT_PORT = 22
 DEFAULT_TIMEOUT = 120
+DEFAULT_SFTP_CHUNK_SIZE = 4 * 1024 * 1024
 COMMANDS = {
     "open", "status", "close", "forget", "reap", "exec", "run", "job",
     "jobs", "cancel", "wait", "put", "get", "ls", "cat", "last", "daemon",
@@ -47,6 +49,14 @@ CACHE_ACTIONS = {
 }
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 FORWARD_CHUNK_BYTES = 64 * 1024
+
+
+class RegistryReferenceError(ValueError):
+    """删除 SSH alias/profile 前发现注册表依赖。"""
+
+    def __init__(self, message: str, details: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.details = details
 
 
 def ensure_dirs() -> None:
@@ -93,6 +103,30 @@ def render_error(result: dict[str, Any], as_json: bool = False) -> None:
         print_json(result)
     else:
         write_stream(sys.stderr, f"error: {result.get('error', 'unknown SSH error')}\n")
+        impact = result.get("impact")
+        if isinstance(impact, dict):
+            for kind in ("deployments", "services", "backup_assets", "relations", "project_bindings"):
+                items = impact.get(kind, [])
+                if isinstance(items, list) and items:
+                    ids = ", ".join(
+                        str(
+                            item.get("id")
+                            or item.get("path")
+                            or item.get("project_root")
+                            or ""
+                        )
+                        for item in items
+                        if isinstance(item, dict)
+                    )
+                    if ids:
+                        write_stream(sys.stderr, f"impact {kind}: {ids}\n")
+        if "confirmation_required" in result:
+            write_stream(
+                sys.stderr,
+                f"confirmation_required={plain_value(result.get('confirmation_required'))}\n",
+            )
+        if "registry_revision" in result:
+            write_stream(sys.stderr, f"registry_revision={result.get('registry_revision')}\n")
 
 
 def read_json(path: Path, default: Any) -> Any:
@@ -118,6 +152,76 @@ def load_config() -> dict[str, Any]:
 
 def save_config(config: dict[str, Any]) -> None:
     write_toml(CONFIG_FILE, config)
+
+
+def ssh_registry() -> registry_store.RegistryStore:
+    registry_file = os.environ.get("SSHX_REGISTRY_FILE") or str(CONFIG_FILE.with_name("ops.toml"))
+    revision_dir = os.environ.get("SSHX_REGISTRY_REVISION_DIR") or None
+    return registry_store.RegistryStore(registry_file=registry_file, revision_dir=revision_dir)
+
+
+def reconcile_ssh_registry(
+    alias: str,
+    profile_id: str,
+    remaining_aliases: list[str],
+    confirm: bool,
+    document: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    removing_profile = not remaining_aliases
+    impact = registry_store.reference_impact(
+        document,
+        ssh_aliases={alias},
+        ssh_profiles={profile_id} if removing_profile else set(),
+    )
+    result: dict[str, Any] = {
+        "target": {
+            "kind": "ssh_profile" if removing_profile else "ssh_alias",
+            "alias": alias,
+            "profile": profile_id,
+            "remaining_aliases": remaining_aliases,
+        },
+        "impact": impact,
+        "synced": [],
+        "orphaned": [],
+        "confirmation_required": False,
+        "registry_revision": document.get("revision", 0),
+    }
+    if not impact["has_references"]:
+        result["status"] = "ready"
+        return result, False
+
+    if not removing_profile:
+        replacement = sorted(remaining_aliases)[0]
+        changes = registry_store.synchronize_references(
+            document,
+            {alias: replacement},
+            {
+                "deployments": ("ssh_alias",),
+                "backup_assets": ("ssh_alias",),
+                "relations": ("source_id", "target_id"),
+            },
+        )
+        result["status"] = "synced"
+        result["synced"] = changes
+        return result, bool(changes)
+
+    if not confirm:
+        result["status"] = "blocked"
+        result["confirmation_required"] = True
+        result["confirmation_hint"] = "sshx forget --confirm <alias>"
+        raise RegistryReferenceError(
+            f"cannot forget SSH profile {profile_id}; registry references exist",
+            result,
+        )
+
+    marked = registry_store.mark_references_orphaned(
+        document,
+        impact,
+        f"SSH profile removed: {profile_id}",
+    )
+    result["status"] = "orphaned"
+    result["orphaned"] = marked
+    return result, bool(marked)
 
 
 def profile_jump_ids(profile: dict[str, Any]) -> tuple[str, ...]:
@@ -645,6 +749,14 @@ def sha256_local(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_remote(sftp: paramiko.SFTPClient, remote: str, chunk_size: int) -> str:
+    digest = hashlib.sha256()
+    with sftp.open(remote, "rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def sftp_mkdirs(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
     if remote_dir in ("", "."):
         return
@@ -675,12 +787,25 @@ def sftp_put(
     local_text: str,
     remote: str,
     timeout: int = DEFAULT_TIMEOUT,
+    *,
+    resume: bool = False,
+    chunk_size: int = DEFAULT_SFTP_CHUNK_SIZE,
 ) -> dict[str, Any]:
+    if chunk_size < 1:
+        raise ValueError("chunk size must be positive")
     local = Path(local_text).expanduser().resolve()
     if not local.exists():
         raise FileNotFoundError(f"local path not found: {local}")
+    if resume and local.is_dir():
+        raise ValueError("resume upload only supports a single file")
     files = 0
     bytes_count = 0
+    transferred_bytes = 0
+    chunks = 0
+    resumed = False
+    resume_offset = 0
+    skipped = False
+    local_digest = sha256_local(local) if local.is_file() else None
     with open_sftp_session(client, timeout) as sftp:
         if local.is_dir():
             for path in local.rglob("*"):
@@ -694,12 +819,61 @@ def sftp_put(
         else:
             remote_file = posixpath.join(remote, local.name) if remote.endswith("/") or remote_is_dir(sftp, remote) else remote
             sftp_mkdirs(sftp, posixpath.dirname(remote_file))
-            sftp.put(str(local), remote_file)
+            local_size = local.stat().st_size
+            offset = 0
+            mode = "wb"
+            if resume:
+                try:
+                    remote_size = sftp.stat(remote_file).st_size
+                except OSError:
+                    remote_size = 0
+                if remote_size < local_size:
+                    offset = remote_size
+                    mode = "r+b"
+                    resumed = offset > 0
+                elif remote_size == local_size and local_digest is not None:
+                    if sha256_remote(sftp, remote_file, chunk_size) == local_digest:
+                        offset = local_size
+                        resume_offset = offset
+                        resumed = offset > 0
+                        skipped = True
+                    else:
+                        mode = "r+b"
+                elif remote_size > local_size:
+                    mode = "r+b"
+            if not skipped:
+                with local.open("rb") as source:
+                    source.seek(offset)
+                    with sftp.open(remote_file, mode) as destination:
+                        if mode == "r+b":
+                            if offset == 0:
+                                destination.truncate(0)
+                            destination.seek(offset)
+                        while True:
+                            chunk = source.read(chunk_size)
+                            if not chunk:
+                                break
+                            destination.write(chunk)
+                            transferred_bytes += len(chunk)
+                            chunks += 1
+                        destination.flush()
+                resume_offset = offset
             files = 1
-            bytes_count = local.stat().st_size
-    result: dict[str, Any] = {"files": files, "bytes": bytes_count, "remote": remote}
-    if local.is_file():
-        result["sha256"] = sha256_local(local)
+            bytes_count = local_size
+    result: dict[str, Any] = {
+        "files": files,
+        "bytes": bytes_count,
+        "transferred_bytes": transferred_bytes if local.is_file() else bytes_count,
+        "chunks": chunks,
+        "remote": remote,
+        "resume": bool(resume),
+        "resumed": resumed,
+        "resume_offset": resume_offset,
+        "skipped": skipped,
+        "chunk_size": chunk_size,
+    }
+    if local.is_file() and local_digest is not None:
+        result["sha256"] = local_digest
     return result
 
 
@@ -1220,7 +1394,14 @@ class Daemon:
                 int(payload.get("max_bytes", FORWARD_CHUNK_BYTES)),
             )
         if action == "put":
-            return sftp_put(client, payload["local"], payload["remote"], operation_timeout)
+            return sftp_put(
+                client,
+                payload["local"],
+                payload["remote"],
+                operation_timeout,
+                resume=bool(payload.get("resume", False)),
+                chunk_size=int(payload.get("chunk_size", DEFAULT_SFTP_CHUNK_SIZE)),
+            )
         if action == "get":
             return sftp_get(client, payload["remote"], payload["local"], operation_timeout)
         if action == "ls":
@@ -1491,10 +1672,14 @@ def run_close(args: argparse.Namespace) -> int:
 
 
 def run_forget(args: argparse.Namespace) -> int:
-    with lock_files(CONFIG_FILE):
+    store = ssh_registry()
+    with FileTransaction(
+        (CONFIG_FILE, store.registry_file),
+        glob_paths=((store.revision_dir, "revision-*.toml"),),
+    ) as transaction:
         profile_id, _profile, config = resolve_profile(args.alias)
-        config["aliases"].pop(args.alias, None)
-        remaining = aliases_for(config, profile_id)
+        all_aliases = aliases_for(config, profile_id)
+        remaining = [item for item in all_aliases if item != args.alias]
         if not remaining:
             dependents = [
                 dependent_id
@@ -1504,10 +1689,30 @@ def run_forget(args: argparse.Namespace) -> int:
             if dependents:
                 labels = ", ".join(profile_aliases_or_id(config, item) for item in dependents)
                 raise ValueError(f"cannot forget SSH profile {profile_id}; used by jump profiles: {labels}")
+        document = store.load_locked()
+        registry_result, registry_changed = reconcile_ssh_registry(
+            args.alias,
+            profile_id,
+            remaining,
+            bool(getattr(args, "confirm", False)),
+            document,
+        )
+        config["aliases"].pop(args.alias, None)
+        remaining = aliases_for(config, profile_id)
+        if not remaining:
             close_profile(profile_id)
             config["profiles"].pop(profile_id, None)
         save_config(config)
-    print_json({"forgotten": args.alias, "profile": profile_id, "remaining_aliases": remaining})
+        if registry_changed:
+            committed = store.save_locked(document)
+            registry_result["registry_revision"] = committed.get("revision", 0)
+        transaction.commit()
+    print_json({
+        "forgotten": args.alias,
+        "profile": profile_id,
+        "remaining_aliases": remaining,
+        "registry": registry_result,
+    })
     return 0
 
 
@@ -1565,7 +1770,7 @@ def operation_request(args: argparse.Namespace) -> dict[str, Any]:
         return values
     return {
         key: getattr(args, key)
-        for key in ("local", "remote", "max_bytes")
+        for key in ("local", "remote", "max_bytes", "resume", "chunk_size")
         if hasattr(args, key)
     }
 
@@ -1732,8 +1937,13 @@ def render_result(action: str, result: dict[str, Any], as_json: bool, cached: bo
         write_stream(sys.stdout, key_value_text([
             ("files", result.get("files", 0)),
             ("bytes", result.get("bytes", 0)),
+            ("transferred_bytes", result.get("transferred_bytes", 0)),
+            ("chunks", result.get("chunks", 0)),
             ("remote", result.get("remote", "")),
             ("sha256", result.get("sha256", "")),
+            ("resumed", result.get("resumed", False)),
+            ("resume_offset", result.get("resume_offset", 0)),
+            ("skipped", result.get("skipped", False)),
         ]))
     elif action == "get":
         write_stream(sys.stdout, key_value_text([
@@ -1988,6 +2198,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     forget_parser = subparsers.add_parser("forget")
     forget_parser.add_argument("alias")
+    forget_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="确认删除最后一个 alias，并将注册表依赖标记为 orphaned",
+    )
+    add_json_arg(forget_parser)
     forget_parser.set_defaults(func=run_forget)
 
     reap_parser = subparsers.add_parser("reap")
@@ -2080,6 +2296,13 @@ def build_parser() -> argparse.ArgumentParser:
     put_parser.add_argument("local")
     put_parser.add_argument("remote")
     put_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    put_parser.add_argument("--resume", action="store_true", help="从远端已有文件偏移继续上传")
+    put_parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=DEFAULT_SFTP_CHUNK_SIZE,
+        help="单次 SFTP 写入字节数",
+    )
     add_json_arg(put_parser)
     put_parser.set_defaults(func=run_simple_request)
 
@@ -2142,7 +2365,7 @@ def main() -> int:
         render_error(error, getattr(args, "json", False))
         return 2
     except Exception as exc:
-        error = {"error": str(exc)}
+        error = {"error": str(exc), **getattr(exc, "details", {})}
         if args.action in CACHE_ACTIONS:
             save_operation_result(args, error, False)
         render_error(error, getattr(args, "json", False))

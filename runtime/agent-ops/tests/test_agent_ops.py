@@ -29,6 +29,7 @@ import config_store
 import db_core
 import db_ops
 import paramiko
+import registry_store
 import result_store
 import ssh_ops
 
@@ -53,6 +54,15 @@ class ConfigStoreTest(unittest.TestCase):
             }
             config_store.write_toml(path, payload)
             self.assertEqual(config_store.load_toml(path), payload)
+
+    def test_round_trip_floats_and_rejects_non_finite_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "observed.toml"
+            payload = {"cpu": 0.25, "memory": 1.5, "nested": {"load": 3.0}}
+            config_store.write_toml(path, payload)
+            self.assertEqual(config_store.load_toml(path), payload)
+            with self.assertRaisesRegex(ValueError, "finite"):
+                config_store.write_toml(path, {"cpu": float("nan")})
 
 
 class ResultStoreTest(unittest.TestCase):
@@ -446,6 +456,96 @@ class SshOutputTest(unittest.TestCase):
         self.assertEqual(parser.parse_args(["job", "prod", "job-1"]).timeout, 120)
         self.assertEqual(ssh_ops.DEFAULT_TIMEOUT, 120)
 
+    def test_put_parser_exposes_resume_and_chunk_size(self) -> None:
+        parser = ssh_ops.build_parser()
+        args = parser.parse_args([
+            "put", "prod", "local.tar.gz", "/tmp/local.tar.gz",
+            "--resume", "--chunk-size", "4096",
+        ])
+        self.assertTrue(args.resume)
+        self.assertEqual(args.chunk_size, 4096)
+
+    def test_sftp_put_resumes_partial_file_and_skips_verified_file(self) -> None:
+        class FakeStat:
+            def __init__(self, size: int, directory: bool = False) -> None:
+                self.st_size = size
+                self.st_mode = 0o040755 if directory else 0o100644
+
+        class FakeHandle:
+            def __init__(self, storage: bytearray, mode: str) -> None:
+                self.storage = storage
+                self.mode = mode
+                self.position = 0
+
+            def __enter__(self) -> "FakeHandle":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def seek(self, offset: int) -> None:
+                self.position = offset
+
+            def read(self, size: int) -> bytes:
+                result = bytes(self.storage[self.position:self.position + size])
+                self.position += len(result)
+                return result
+
+            def write(self, value: bytes) -> None:
+                end = self.position + len(value)
+                self.storage[self.position:end] = value
+                self.position = end
+
+            def truncate(self, size: int = 0) -> None:
+                del self.storage[size:]
+                self.position = min(self.position, size)
+
+            def flush(self) -> None:
+                return None
+
+        class FakeSftp:
+            def __init__(self) -> None:
+                self.files = {"/tmp/upload.tar.gz": bytearray(b"abcd")}
+
+            def __enter__(self) -> "FakeSftp":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def stat(self, path: str) -> FakeStat:
+                if path not in self.files:
+                    raise OSError(path)
+                return FakeStat(len(self.files[path]))
+
+            def open(self, path: str, mode: str) -> FakeHandle:
+                if "w" in mode:
+                    self.files[path] = bytearray()
+                storage = self.files.setdefault(path, bytearray())
+                return FakeHandle(storage, mode)
+
+            def mkdir(self, _path: str) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as temp:
+            local = Path(temp) / "upload.tar.gz"
+            local.write_bytes(b"abcdefghij")
+            fake_sftp = FakeSftp()
+            with patch.object(ssh_ops, "open_sftp_session", return_value=fake_sftp):
+                resumed = ssh_ops.sftp_put(
+                    object(), str(local), "/tmp/upload.tar.gz", resume=True, chunk_size=3
+                )
+                skipped = ssh_ops.sftp_put(
+                    object(), str(local), "/tmp/upload.tar.gz", resume=True, chunk_size=3
+                )
+            self.assertEqual(fake_sftp.files["/tmp/upload.tar.gz"], bytearray(b"abcdefghij"))
+            self.assertTrue(resumed["resumed"])
+            self.assertEqual(resumed["resume_offset"], 4)
+            self.assertEqual(resumed["transferred_bytes"], 6)
+            self.assertEqual(resumed["chunks"], 2)
+            self.assertTrue(skipped["skipped"])
+            self.assertEqual(skipped["transferred_bytes"], 0)
+
     def test_exec_uses_native_streams(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -457,6 +557,25 @@ class SshOutputTest(unittest.TestCase):
             )
         self.assertEqual(stdout.getvalue(), "raw output\n")
         self.assertEqual(stderr.getvalue(), "warning\n")
+
+    def test_human_error_output_includes_full_registry_impact(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            ssh_ops.render_error({
+                "error": "references exist",
+                "impact": {
+                    "deployments": [{"id": "mall/api/prod"}],
+                    "relations": [{"id": "api-db"}],
+                    "project_bindings": [{"path": "/tmp/project.toml"}],
+                },
+                "confirmation_required": True,
+                "registry_revision": 7,
+            })
+        output = stderr.getvalue()
+        self.assertIn("impact relations: api-db", output)
+        self.assertIn("impact project_bindings: /tmp/project.toml", output)
+        self.assertIn("confirmation_required=true", output)
+        self.assertIn("registry_revision=7", output)
 
     def test_ls_and_status_use_csv(self) -> None:
         stdout = io.StringIO()
@@ -595,6 +714,346 @@ class SshProfileChainTest(unittest.TestCase):
                 self.assertIn("one", saved["aliases"])
             finally:
                 ssh_ops.CONFIG_FILE = old_config_file
+
+
+class RegistryReferenceRemovalTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = {
+            "profiles": {
+                "jump-1": {"host": "jump-1", "port": 22, "user": "tester"},
+                "jump-2": {"host": "jump-2", "port": 22, "user": "tester", "jump_profiles": ["jump-1"]},
+                "target": {"host": "target", "port": 22, "user": "tester", "jump_profiles": ["jump-2"]},
+            },
+            "aliases": {"one": "jump-1", "two": "jump-2", "target": "target"},
+        }
+
+    def make_registry(self, root: Path) -> registry_store.RegistryStore:
+        return registry_store.RegistryStore(
+            registry_file=root / "ops.toml",
+            revision_dir=root / "revisions",
+        )
+
+    def seed_registry(self, store: registry_store.RegistryStore, *, ssh_alias: str = "old") -> None:
+        store.create("project", "mall", {"name": "商城"})
+        store.create("service", "api", {"name": "API", "project_id": "mall"})
+        store.create("environment", "prod", {"name": "生产"})
+        store.create(
+            "deployment",
+            "mall/api/prod",
+            {
+                "ssh_alias": ssh_alias,
+                "ssh_profile": "ssh_profile",
+                "status": "managed",
+                "management_status": "managed",
+            },
+        )
+        store.create(
+            "backup_asset",
+            "mall-files",
+            {
+                "project_id": "mall",
+                "service_id": "api",
+                "environment": "prod",
+                "kind": "file",
+                "ssh_alias": ssh_alias,
+                "status": "active",
+            },
+        )
+
+    def test_ssh_forget_syncs_alias_when_profile_survives(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config_path = root / "ssh.toml"
+            registry_path = root / "ops.toml"
+            config_store.write_toml(
+                config_path,
+                {
+                    "profiles": {"ssh_profile": {"host": "server", "user": "root"}},
+                    "aliases": {"old": "ssh_profile", "new": "ssh_profile"},
+                },
+            )
+            store = self.make_registry(root)
+            self.seed_registry(store)
+            old_config = ssh_ops.CONFIG_FILE
+            try:
+                ssh_ops.CONFIG_FILE = config_path
+                with patch.dict(
+                    os.environ,
+                    {
+                        "SSHX_REGISTRY_FILE": str(registry_path),
+                        "SSHX_REGISTRY_REVISION_DIR": str(root / "revisions"),
+                    },
+                    clear=False,
+                ):
+                    with redirect_stdout(io.StringIO()):
+                        ssh_ops.run_forget(argparse.Namespace(alias="old", confirm=False, json=True))
+                saved = config_store.load_toml(config_path)
+                self.assertNotIn("old", saved["aliases"])
+                self.assertIn("new", saved["aliases"])
+                current = store.load()
+                self.assertEqual(current["deployments"]["mall/api/prod"]["ssh_alias"], "new")
+                self.assertEqual(current["backup_assets"]["mall-files"]["ssh_alias"], "new")
+            finally:
+                ssh_ops.CONFIG_FILE = old_config
+
+    def test_ssh_forget_requires_confirmation_and_marks_orphaned(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config_path = root / "ssh.toml"
+            registry_path = root / "ops.toml"
+            config_store.write_toml(
+                config_path,
+                {
+                    "profiles": {"ssh_profile": {"host": "server", "user": "root"}},
+                    "aliases": {"old": "ssh_profile"},
+                },
+            )
+            store = self.make_registry(root)
+            self.seed_registry(store)
+            old_config = ssh_ops.CONFIG_FILE
+            try:
+                ssh_ops.CONFIG_FILE = config_path
+                env = {
+                    "SSHX_REGISTRY_FILE": str(registry_path),
+                    "SSHX_REGISTRY_REVISION_DIR": str(root / "revisions"),
+                }
+                with patch.dict(os.environ, env, clear=False):
+                    with self.assertRaises(ssh_ops.RegistryReferenceError) as blocked:
+                        ssh_ops.run_forget(argparse.Namespace(alias="old", confirm=False, json=True))
+                    self.assertEqual(blocked.exception.details["status"], "blocked")
+                    self.assertIn("mall/api/prod", {
+                        item["id"] for item in blocked.exception.details["impact"]["deployments"]
+                    })
+                    self.assertIn("old", config_store.load_toml(config_path)["aliases"])
+                    with patch.object(ssh_ops, "close_profile", return_value={"closed": True}):
+                        with redirect_stdout(io.StringIO()):
+                            ssh_ops.run_forget(argparse.Namespace(alias="old", confirm=True, json=True))
+                saved = config_store.load_toml(config_path)
+                self.assertNotIn("ssh_profile", saved["profiles"])
+                current = store.load()
+                self.assertEqual(current["deployments"]["mall/api/prod"]["status"], "orphaned")
+                self.assertEqual(current["backup_assets"]["mall-files"]["status"], "orphaned")
+            finally:
+                ssh_ops.CONFIG_FILE = old_config
+
+    def test_ssh_forget_rolls_back_config_when_registry_commit_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config_path = root / "ssh.toml"
+            registry_path = root / "ops.toml"
+            config_store.write_toml(
+                config_path,
+                {
+                    "profiles": {"ssh_profile": {"host": "server", "user": "root"}},
+                    "aliases": {"old": "ssh_profile", "new": "ssh_profile"},
+                },
+            )
+            store = self.make_registry(root)
+            self.seed_registry(store)
+            before_config = config_path.read_bytes()
+            before_registry = registry_path.read_bytes()
+            before_revisions = {
+                path.name: path.read_bytes()
+                for path in store.revision_dir.glob("revision-*.toml")
+            }
+            old_config = ssh_ops.CONFIG_FILE
+            try:
+                ssh_ops.CONFIG_FILE = config_path
+                with patch.dict(
+                    os.environ,
+                    {
+                        "SSHX_REGISTRY_FILE": str(registry_path),
+                        "SSHX_REGISTRY_REVISION_DIR": str(store.revision_dir),
+                    },
+                    clear=False,
+                ), patch.object(
+                    registry_store.RegistryStore,
+                    "save_locked",
+                    side_effect=OSError("registry write failed"),
+                ):
+                    with self.assertRaisesRegex(OSError, "registry write failed"):
+                        ssh_ops.run_forget(argparse.Namespace(alias="old", confirm=False, json=True))
+                self.assertEqual(config_path.read_bytes(), before_config)
+                self.assertEqual(registry_path.read_bytes(), before_registry)
+                self.assertEqual(
+                    {
+                        path.name: path.read_bytes()
+                        for path in store.revision_dir.glob("revision-*.toml")
+                    },
+                    before_revisions,
+                )
+            finally:
+                ssh_ops.CONFIG_FILE = old_config
+
+    def test_db_source_remove_syncs_alias_when_profile_survives(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            databases_path = root / "databases.toml"
+            registry_path = root / "ops.toml"
+            old_file = db_ops.DATABASES_FILE
+            old_projects = db_ops.PROJECTS_DIR
+            db_ops.DATABASES_FILE = databases_path
+            db_ops.PROJECTS_DIR = root / "projects"
+            config_store.write_toml(
+                databases_path,
+                {
+                    "profiles": {"db_profile": {
+                        "engine": "postgresql", "host": "db", "port": 5432,
+                        "database": "app", "user": "app", "password": "keep",
+                    }},
+                    "aliases": {"old-db": "db_profile", "new-db": "db_profile"},
+                },
+            )
+            store = self.make_registry(root)
+            store.create("project", "mall", {"name": "商城"})
+            store.create("service", "api", {"name": "API", "project_id": "mall"})
+            store.create("backup_asset", "mall-db", {
+                "project_id": "mall", "service_id": "api", "environment": "prod",
+                "kind": "db", "db_source": "old-db", "status": "active",
+            })
+            try:
+                with patch.dict(
+                    os.environ,
+                    {
+                        "DBX_REGISTRY_FILE": str(registry_path),
+                        "DBX_REGISTRY_REVISION_DIR": str(root / "revisions"),
+                    },
+                    clear=False,
+                ):
+                    with redirect_stdout(io.StringIO()):
+                        db_ops.handle_source_remove(argparse.Namespace(
+                            source="old-db", confirm=False, json=True,
+                        ))
+                saved = config_store.load_toml(databases_path)
+                self.assertNotIn("old-db", saved["aliases"])
+                self.assertIn("new-db", saved["aliases"])
+                self.assertEqual(store.load()["backup_assets"]["mall-db"]["db_source"], "new-db")
+            finally:
+                db_ops.DATABASES_FILE = old_file
+                db_ops.PROJECTS_DIR = old_projects
+
+    def test_db_source_remove_requires_confirmation_and_clears_project_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            databases_path = root / "databases.toml"
+            registry_path = root / "ops.toml"
+            projects_dir = root / "projects"
+            projects_dir.mkdir()
+            old_file = db_ops.DATABASES_FILE
+            old_projects = db_ops.PROJECTS_DIR
+            db_ops.DATABASES_FILE = databases_path
+            db_ops.PROJECTS_DIR = projects_dir
+            config_store.write_toml(
+                databases_path,
+                {
+                    "profiles": {"db_profile": {
+                        "engine": "postgresql", "host": "db", "port": 5432,
+                        "database": "app", "user": "app", "password": "keep",
+                    }},
+                    "aliases": {"old-db": "db_profile"},
+                },
+            )
+            project_path = projects_dir / "project.toml"
+            config_store.write_toml(project_path, {
+                "project_root": "/tmp/mall",
+                "default_source": "db_profile",
+                "bindings": {"manual:main": "db_profile"},
+            })
+            store = self.make_registry(root)
+            store.create("project", "mall", {"name": "商城"})
+            store.create("service", "api", {"name": "API", "project_id": "mall"})
+            store.create("backup_asset", "mall-db", {
+                "project_id": "mall", "service_id": "api", "environment": "prod",
+                "kind": "db", "db_source": "old-db", "status": "active",
+            })
+            try:
+                env = {
+                    "DBX_REGISTRY_FILE": str(registry_path),
+                    "DBX_REGISTRY_REVISION_DIR": str(root / "revisions"),
+                }
+                with patch.dict(os.environ, env, clear=False):
+                    with self.assertRaises(db_ops.RegistryReferenceError) as blocked:
+                        db_ops.handle_source_remove(argparse.Namespace(
+                            source="old-db", confirm=False, json=True,
+                        ))
+                    self.assertEqual(blocked.exception.details["status"], "blocked")
+                    self.assertIn("mall-db", {
+                        item["id"] for item in blocked.exception.details["impact"]["backup_assets"]
+                    })
+                    with redirect_stdout(io.StringIO()):
+                        db_ops.handle_source_remove(argparse.Namespace(
+                            source="old-db", confirm=True, json=True,
+                        ))
+                saved = config_store.load_toml(databases_path)
+                self.assertNotIn("db_profile", saved["profiles"])
+                self.assertEqual(config_store.load_toml(project_path)["default_source"], "")
+                self.assertEqual(config_store.load_toml(project_path)["bindings"], {})
+                self.assertEqual(store.load()["backup_assets"]["mall-db"]["status"], "orphaned")
+            finally:
+                db_ops.DATABASES_FILE = old_file
+                db_ops.PROJECTS_DIR = old_projects
+
+    def test_db_source_remove_rolls_back_config_when_registry_commit_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            databases_path = root / "databases.toml"
+            registry_path = root / "ops.toml"
+            old_file = db_ops.DATABASES_FILE
+            old_projects = db_ops.PROJECTS_DIR
+            db_ops.DATABASES_FILE = databases_path
+            db_ops.PROJECTS_DIR = root / "projects"
+            config_store.write_toml(
+                databases_path,
+                {
+                    "profiles": {"db_profile": {
+                        "engine": "postgresql", "host": "db", "port": 5432,
+                        "database": "app", "user": "app", "password": "keep",
+                    }},
+                    "aliases": {"old-db": "db_profile", "new-db": "db_profile"},
+                },
+            )
+            store = self.make_registry(root)
+            store.create("project", "mall", {"name": "商城"})
+            store.create("service", "api", {"name": "API", "project_id": "mall"})
+            store.create("backup_asset", "mall-db", {
+                "project_id": "mall", "service_id": "api", "environment": "prod",
+                "kind": "db", "db_source": "old-db", "status": "active",
+            })
+            before_config = databases_path.read_bytes()
+            before_registry = registry_path.read_bytes()
+            before_revisions = {
+                path.name: path.read_bytes()
+                for path in store.revision_dir.glob("revision-*.toml")
+            }
+            try:
+                with patch.dict(
+                    os.environ,
+                    {
+                        "DBX_REGISTRY_FILE": str(registry_path),
+                        "DBX_REGISTRY_REVISION_DIR": str(store.revision_dir),
+                    },
+                    clear=False,
+                ), patch.object(
+                    registry_store.RegistryStore,
+                    "save_locked",
+                    side_effect=OSError("registry write failed"),
+                ):
+                    with self.assertRaisesRegex(OSError, "registry write failed"):
+                        db_ops.handle_source_remove(argparse.Namespace(
+                            source="old-db", confirm=False, json=True,
+                        ))
+                self.assertEqual(databases_path.read_bytes(), before_config)
+                self.assertEqual(registry_path.read_bytes(), before_registry)
+                self.assertEqual(
+                    {
+                        path.name: path.read_bytes()
+                        for path in store.revision_dir.glob("revision-*.toml")
+                    },
+                    before_revisions,
+                )
+            finally:
+                db_ops.DATABASES_FILE = old_file
+                db_ops.PROJECTS_DIR = old_projects
 
     def test_connection_chain_uses_each_previous_transport_as_next_socket(self) -> None:
         class FakeChannel:

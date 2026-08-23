@@ -41,7 +41,7 @@ sshx <别名> "<命令>"
 sshx exec --json <别名> "<命令>"
 sshx ls <别名> <远端目录>
 sshx cat <别名> <远端文件>
-sshx put <别名> <本地路径> <远端路径>
+sshx put <别名> <本地路径> <远端路径> [--resume] [--chunk-size <字节数>]
 sshx get <别名> <远端路径> <本地路径>
 sshx run <别名> "<长任务命令>"
 sshx job <别名> <job_id>
@@ -55,11 +55,15 @@ sshx forward status <别名> <forward_id>
 sshx forward close <别名> <forward_id>
 sshx status [别名]
 sshx close <别名>
-sshx forget <别名>
+sshx forget <别名> [--confirm] [--json]
 sshx last [--summary|--json|--clear]
 ```
 
 SSH 建连、同步远程操作和普通远程命令默认超时均为 120 秒，可用 `--timeout` 覆盖。普通命令会按已保存 profile 自动建立或恢复连接；同一 `host + port + user + 跳板链` 的别名共用连接。
+
+`sshx put --resume` 只对单文件上传启用断点续传：如果远端已有同名部分文件，会从已有字节偏移继续；远端文件大小相同但 SHA-256 不一致时会重新上传。`--chunk-size` 控制单次 SFTP 写入大小，默认 4 MiB。目录上传保持原有递归上传行为。
+
+`forget` 删除 alias 前会检查全局注册表 `ops.toml`。同一 profile 仍有其它 alias 时，会把 deployment 和 file backup asset 的引用同步到存活 alias；删除最后一个 alias/profile 时，如果存在 deployment、service 或 backup asset 影响，默认阻断并返回清单，只有显式 `--confirm` 才会把 deployment/backup asset 标记为 `orphaned`。该操作不删除远端服务、目录或备份文件，也不改 SSH 密码。
 
 跳板机支持多级。每一级跳板先用 `sshx open` 保存自己的凭据，再通过 `--jump` 绑定；跳板别名可以继续带自己的 `--jump`：
 

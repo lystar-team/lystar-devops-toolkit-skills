@@ -30,10 +30,12 @@ dbx source add <别名> --type <mysql|mariadb|postgresql> --host <host> --port <
 dbx source add <别名> --url "<数据库URL>"
 dbx source list
 dbx source show <别名|profile>
-dbx source remove <别名|profile>
+dbx source remove <别名|profile> [--confirm] [--json]
 ```
 
 同一 `db_type + host + port + database + user` 只保存一个 profile，多个别名可以复用。`db_type` 规范化为 `mysql`、`mariadb` 或 `postgresql`；旧 profile 的 `engine` 字段继续兼容。自动发现的数据源会写入全局配置，项目保存发现来源绑定和默认 profile。
+
+`source remove` 删除 alias/profile 前会检查全局注册表和项目默认 source。profile 仍有其它 alias 时，会把 deployment 的数据库引用和数据库 backup asset 同步到存活 alias；删除最后一个 alias/profile 时，如果存在 deployment、service、backup asset 或项目绑定，默认阻断并返回影响清单，只有显式 `--confirm` 才会把 deployment/backup asset 标记为 `orphaned`，同时清理已失效的项目默认 source/binding。不会删除备份文件，不改其它 source 的密码或旧配置字段。
 
 `source show` 会在成功连接后执行对应数据库的版本查询，并保存 `version`、可比较的 `version_parts`、`version_status` 和 `connection_status`。发现尚未连接的数据源时，版本状态为 `not_probed`；连接失败为 `connection_status=unavailable`，版本查询失败为 `version_status=query_failed`，不伪造版本号。
 

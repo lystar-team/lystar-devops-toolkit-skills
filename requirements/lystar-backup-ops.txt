@@ -1,0 +1,1 @@
+# backupx 只使用 Python 3.11+ 标准库，并通过现有 dbx/sshx/hostx CLI 工作。

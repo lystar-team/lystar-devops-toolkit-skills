@@ -19,6 +19,8 @@
 
 需要 Unix 兼容系统、Python 3.11+ 和联网安装 Paramiko。SSH 建连、同步远程操作和普通远程命令默认超时为 120 秒。
 
+单文件上传使用 `sshx put <别名> <本地路径> <远端路径>`；需要跨连接续传时追加 `--resume`，并可用 `--chunk-size <字节数>` 调整单次 SFTP 写入大小，默认 4 MiB。目录上传保持原有递归行为。
+
 多级跳板机通过 `--jump` 绑定，跳板别名可以递归引用更前一级跳板：
 
 ```bash
@@ -53,3 +55,5 @@ sshx forward close prod <forward_id>
 ```
 
 任务列表和单任务查询沿用远端 `~/.agent-ops/jobs/<job_id>`；`--follow` 按日志偏移增量输出 stdout/stderr 和状态变化。端口转发由已有 SSH daemon 管理，关闭 profile 时一并回收。
+
+`sshx forget <alias> --json` 会先检查全局注册表的 deployment、service 和 backup asset 影响。同一 profile 仍有其它 alias 时，引用会同步到存活 alias；删除最后一个 alias/profile 时必须显式使用 `--confirm` 才会将 deployment/backup asset 标记为 `orphaned`。不会静默删除远端对象、备份文件或 SSH 密码。

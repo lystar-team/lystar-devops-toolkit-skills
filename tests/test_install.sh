@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+unset CODEX_HOME CLAUDE_CONFIG_DIR OPENCODE_CONFIG_DIR PI_CODING_AGENT_DIR SKILLS_HOME
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temp=$(mktemp -d)
@@ -61,10 +62,21 @@ XDG_STATE_HOME="$auto/state" \
 XDG_BIN_HOME="$auto/bin" \
 PYTHON_BIN="$fake_python" \
     sh "$root/install.sh" >/dev/null
+for command in dbx sshx hostx deployx backupx incidentx lystar-skill-update; do
+    test -x "$auto/bin/$command"
+done
 assert_skill "$auto/home/.codex/skills" lystar-db-ops
 assert_skill "$auto/home/.codex/skills" lystar-ssh-ops
+assert_skill "$auto/home/.codex/skills" lystar-host-ops
+assert_skill "$auto/home/.codex/skills" lystar-deploy-ops
+assert_skill "$auto/home/.codex/skills" lystar-backup-ops
+assert_skill "$auto/home/.codex/skills" lystar-incident-ops
 assert_skill "$auto/home/.pi/agent/skills" lystar-db-ops
 assert_skill "$auto/home/.pi/agent/skills" lystar-ssh-ops
+assert_skill "$auto/home/.pi/agent/skills" lystar-host-ops
+assert_skill "$auto/home/.pi/agent/skills" lystar-deploy-ops
+assert_skill "$auto/home/.pi/agent/skills" lystar-backup-ops
+assert_skill "$auto/home/.pi/agent/skills" lystar-incident-ops
 test ! -e "$auto/home/.claude/skills/lystar-db-ops"
 test ! -e "$auto/home/.config/opencode/skills/lystar-db-ops"
 assert_server_data "$auto/home/.codex/skills" "$auto/home/lystar-server-list"
@@ -138,12 +150,12 @@ test ! -e "$legacy/skills/ssh-ops"
 test ! -e "$legacy/skills/sql-multi-db-ops"
 test ! -e "$legacy/skills/lystar-server-ops"
 
-# 更新器记录了两个 Skill 和原安装目标。
+# 更新器记录了六个 Skill 和原安装目标。
 python3 - "$auto/state/lystar-devops-toolkit-skills/installed.json" <<'PY'
 import json
 import sys
 state = json.load(open(sys.argv[1], encoding="utf-8"))
-assert sorted(state["skills"]) == ["lystar-db-ops", "lystar-ssh-ops"]
+assert sorted(state["skills"]) == ["lystar-backup-ops", "lystar-db-ops", "lystar-deploy-ops", "lystar-host-ops", "lystar-incident-ops", "lystar-ssh-ops"]
 assert len(state["skills"]["lystar-db-ops"]["skill_homes"]) == 2
 assert state["skills"]["lystar-ssh-ops"]["server_home"].endswith("lystar-server-list")
 PY
