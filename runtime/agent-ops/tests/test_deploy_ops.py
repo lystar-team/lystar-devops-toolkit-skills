@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import http.server
+import io
 import json
 import os
 import sys
 import subprocess
 import tarfile
 import tempfile
+import threading
 import tomllib
 import unittest
 from pathlib import Path
@@ -475,6 +478,70 @@ print(json.dumps({
 '''
 
 
+FAKE_LOCAL_SSHX = r'''#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+if len(sys.argv) > 1 and sys.argv[1] == "put":
+    local = sys.argv[4]
+    remote = sys.argv[5]
+    os.makedirs(os.path.dirname(remote), exist_ok=True)
+    shutil.copy2(local, remote)
+    print(json.dumps({
+        "files": 1,
+        "bytes": os.path.getsize(remote),
+        "remote": remote,
+        "sha256": __import__("hashlib").sha256(open(remote, "rb").read()).hexdigest(),
+    }))
+    raise SystemExit(0)
+
+command = sys.argv[-1] if len(sys.argv) > 1 else ""
+completed = subprocess.run(
+    ["bash", "-c", command],
+    text=True,
+    capture_output=True,
+    env=os.environ,
+)
+print(json.dumps({
+    "stdout": completed.stdout,
+    "stderr": completed.stderr,
+    "exit_code": completed.returncode,
+}))
+'''
+
+
+FAKE_NGINX = r'''#!/bin/sh
+set -eu
+if [ "${1:-}" = "-t" ]; then
+    exit 0
+fi
+if [ "${1:-}" = "-T" ]; then
+    printf 'server {\n  server_name %s;\n  root %s;\n}\n' \
+        "${DEPLOYX_TEST_SERVER_NAME}" "${DEPLOYX_TEST_LIVE_PATH}"
+    exit 0
+fi
+exit 1
+'''
+
+
+FAKE_SYSTEMCTL = r'''#!/bin/sh
+set -eu
+case "${1:-}" in
+    restart) exit 0 ;;
+    is-active) printf 'active\n'; exit 0 ;;
+esac
+exit 0
+'''
+
+
+class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
 class DeployOpsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -488,6 +555,8 @@ class DeployOpsTest(unittest.TestCase):
         self.new_service_log = self.root / "new-service.log"
         self.fake_apply_sshx = self.root / "fake-apply-sshx"
         self.fake_apply_hostx = self.root / "fake-apply-hostx"
+        self.fake_local_sshx = self.root / "fake-local-sshx"
+        self.fake_bin = self.root / "fake-bin"
         self.fake_state = self.root / "fake-state.json"
         self.upload_log = self.root / "upload.log"
         self.backup_repository = self.root / "backups"
@@ -499,6 +568,10 @@ class DeployOpsTest(unittest.TestCase):
         self.fake_adopt_hostx.write_text(FAKE_ADOPT_HOSTX, encoding="utf-8")
         self.fake_apply_sshx.write_text(FAKE_APPLY_SSHX, encoding="utf-8")
         self.fake_apply_hostx.write_text(FAKE_APPLY_HOSTX, encoding="utf-8")
+        self.fake_local_sshx.write_text(FAKE_LOCAL_SSHX, encoding="utf-8")
+        self.fake_bin.mkdir()
+        (self.fake_bin / "nginx").write_text(FAKE_NGINX, encoding="utf-8")
+        (self.fake_bin / "systemctl").write_text(FAKE_SYSTEMCTL, encoding="utf-8")
         self.fake_sshx.chmod(0o755)
         self.fake_hostx.chmod(0o755)
         self.fake_new_service_sshx.chmod(0o755)
@@ -507,6 +580,9 @@ class DeployOpsTest(unittest.TestCase):
         self.fake_adopt_hostx.chmod(0o755)
         self.fake_apply_sshx.chmod(0o755)
         self.fake_apply_hostx.chmod(0o755)
+        self.fake_local_sshx.chmod(0o755)
+        (self.fake_bin / "nginx").chmod(0o755)
+        (self.fake_bin / "systemctl").chmod(0o755)
         self.source_dir = self.root / "mall-admin"
         self.source_dir.mkdir()
         self.artifact = self.root / "web.tar.gz"
@@ -515,6 +591,20 @@ class DeployOpsTest(unittest.TestCase):
             source.write_text("hello", encoding="utf-8")
             archive.add(source, arcname="index.html")
         self.digest = hashlib.sha256(self.artifact.read_bytes()).hexdigest()
+        self.remote_root = self.root / "remote"
+        self.live_path = self.remote_root / "mochu_admin"
+        self.state_root = self.remote_root / ".deployx" / "mochu_admin"
+        self.live_path.mkdir(parents=True)
+        (self.live_path / "index.html").write_text("old-version", encoding="utf-8")
+        handler = lambda *args, **kwargs: QuietHandler(
+            *args, directory=str(self.remote_root), **kwargs
+        )
+        self.http_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
+        self.http_thread.start()
+        self.http_url = (
+            f"http://127.0.0.1:{self.http_server.server_port}/mochu_admin/index.html"
+        )
         self.env = {
             **os.environ,
             "XDG_DATA_HOME": str(REPO_ROOT / "runtime"),
@@ -527,6 +617,9 @@ class DeployOpsTest(unittest.TestCase):
         }
 
     def tearDown(self) -> None:
+        self.http_server.shutdown()
+        self.http_server.server_close()
+        self.http_thread.join(timeout=2)
         self.temp.cleanup()
 
     def run_deployx(self, *args: str, mode: str = "") -> subprocess.CompletedProcess[str]:
@@ -578,6 +671,24 @@ class DeployOpsTest(unittest.TestCase):
             text=True,
             capture_output=True,
             timeout=10,
+        )
+
+    def run_local_deployx(self, *args: str) -> subprocess.CompletedProcess[str]:
+        env = {
+            **self.env,
+            "DEPLOYX_SSHX": str(self.fake_local_sshx),
+            "DEPLOYX_HOSTX": str(self.fake_apply_hostx),
+            "DEPLOYX_TEST_SERVER_NAME": "mochu.admin.example",
+            "DEPLOYX_TEST_LIVE_PATH": str(self.live_path),
+            "PATH": f"{self.fake_bin}:{os.environ.get('PATH', '')}",
+        }
+        return subprocess.run(
+            [str(BIN_DIR / "deployx"), *args],
+            cwd=self.root,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
         )
 
     def run_new_service_deployx(
@@ -961,6 +1072,209 @@ class DeployOpsTest(unittest.TestCase):
         self.assertEqual(upload_calls[0][5], upload_calls[1][5])
         self.assertIn(".deployx-staging/upload-", upload_calls[0][5])
         self.assertFalse(self.fake_state.exists())
+
+    def test_directory_swap_keeps_live_path_and_supports_rollback(self) -> None:
+        unmanaged_release = self.state_root / "releases" / "manual-copy"
+        unmanaged_release.mkdir(parents=True)
+        (unmanaged_release / "index.html").write_text("manual", encoding="utf-8")
+        common = (
+            "local",
+            "--app",
+            "mochu-admin",
+            "--strategy",
+            "directory-swap",
+            "--service-type",
+            "nginx-static",
+            "--live-path",
+            str(self.live_path),
+            "--state-root",
+            str(self.state_root),
+            "--nginx-server-name",
+            "mochu.admin.example",
+        )
+        health_new = f"{self.http_url}|status=200|contains=hello"
+        planned = self.run_local_deployx(
+            "plan",
+            *common,
+            "--artifact",
+            str(self.artifact),
+            "--health-check",
+            health_new,
+            "--json",
+        )
+        self.assertEqual(planned.returncode, 0, planned.stderr + planned.stdout)
+        plan_payload = json.loads(planned.stdout)
+        self.assertEqual(plan_payload["status"], "ready")
+        self.assertEqual(plan_payload["management_status"], "legacy_unmanaged")
+        self.assertEqual(plan_payload["live_path"], str(self.live_path))
+        self.assertTrue(any("保留现场不清理" in item for item in plan_payload["warnings"]))
+
+        applied = self.run_local_deployx(
+            "apply",
+            *common,
+            "--artifact",
+            str(self.artifact),
+            "--health-check",
+            health_new,
+            "--json",
+        )
+        self.assertEqual(applied.returncode, 0, applied.stderr + applied.stdout)
+        applied_payload = json.loads(applied.stdout)
+        self.assertEqual(applied_payload["status"], "healthy")
+        active_release_id = applied_payload["release"]["release_id"]
+        legacy_release_id = applied_payload["previous_release"]["release_id"]
+        self.assertEqual((self.live_path / "index.html").read_text(encoding="utf-8"), "hello")
+        self.assertTrue(self.state_root.joinpath("deployment.json").is_file())
+        self.assertFalse(self.state_root.joinpath("lock", "active").exists())
+        self.assertTrue(unmanaged_release.is_dir())
+
+        repeated = self.run_local_deployx(
+            "apply",
+            *common,
+            "--artifact",
+            str(self.artifact),
+            "--health-check",
+            health_new,
+            "--json",
+        )
+        self.assertEqual(repeated.returncode, 0, repeated.stderr + repeated.stdout)
+        self.assertEqual(json.loads(repeated.stdout)["stage"], "unchanged")
+
+        status = self.run_local_deployx("status", *common, "--json")
+        self.assertEqual(status.returncode, 0, status.stderr + status.stdout)
+        self.assertEqual(json.loads(status.stdout)["management_status"], "managed")
+
+        rolled_back = self.run_local_deployx(
+            "rollback",
+            *common,
+            "--health-check",
+            f"{self.http_url}|status=200|contains=old-version",
+            "--json",
+        )
+        self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr + rolled_back.stdout)
+        self.assertEqual(json.loads(rolled_back.stdout)["status"], "healthy")
+        self.assertEqual(
+            (self.live_path / "index.html").read_text(encoding="utf-8"),
+            "old-version",
+        )
+        deployment = json.loads(
+            self.state_root.joinpath("deployment.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(deployment["current_release"], legacy_release_id)
+        self.assertNotEqual(deployment["current_release"], active_release_id)
+        after_rollback = self.run_local_deployx("status", *common, "--json")
+        self.assertEqual(after_rollback.returncode, 0, after_rollback.stderr + after_rollback.stdout)
+        self.assertEqual(
+            json.loads(after_rollback.stdout)["current_release"]["release_id"],
+            legacy_release_id,
+        )
+        self.assertTrue(unmanaged_release.is_dir())
+
+    def test_directory_swap_health_failure_restores_original_live_path(self) -> None:
+        common = (
+            "local",
+            "--app",
+            "mochu-admin",
+            "--strategy",
+            "directory-swap",
+            "--service-type",
+            "nginx-static",
+            "--live-path",
+            str(self.live_path),
+            "--state-root",
+            str(self.state_root),
+            "--nginx-server-name",
+            "mochu.admin.example",
+        )
+        result = self.run_local_deployx(
+            "apply",
+            *common,
+            "--artifact",
+            str(self.artifact),
+            "--health-check",
+            f"{self.http_url}|status=200|contains=not-present",
+            "--json",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["failed_stage"], "application-health")
+        self.assertEqual(payload["rollback"]["status"], "ok")
+        self.assertEqual(
+            (self.live_path / "index.html").read_text(encoding="utf-8"),
+            "old-version",
+        )
+        self.assertFalse(self.state_root.joinpath("lock", "active").exists())
+        self.assertTrue(any(self.state_root.joinpath("failed").iterdir()))
+
+    def test_versioned_apply_executes_real_stage_shell_and_reuses_release(self) -> None:
+        release_root = self.remote_root / "apps"
+        app_root = release_root / "web"
+        old_id = "web-old-111111111111"
+        old_release = app_root / "releases" / old_id
+        old_release.mkdir(parents=True)
+        (old_release / "index.html").write_text("old", encoding="utf-8")
+        old_manifest = {
+            "schema_version": 1,
+            "release_id": old_id,
+            "created_at": "2026-08-21T10:00:00Z",
+            "artifact_name": "old.tar.gz",
+            "artifact_sha256": "1" * 64,
+            "state": "available",
+            "service": "web.service",
+        }
+        (old_release / "manifest.json").write_text(json.dumps(old_manifest), encoding="utf-8")
+        (app_root / "current").symlink_to(f"releases/{old_id}")
+        (app_root / "deployments").mkdir()
+        (app_root / "deployment.json").write_text(
+            json.dumps({"service": "web.service", "health_checks": ["facts"]}),
+            encoding="utf-8",
+        )
+        args = (
+            "apply",
+            "local",
+            "--app",
+            "web",
+            "--artifact",
+            str(self.artifact),
+            "--release-root",
+            str(release_root),
+            "--service",
+            "web.service",
+            "--health-check",
+            "facts",
+            "--json",
+        )
+        first = self.run_local_deployx(*args)
+        second = self.run_local_deployx(*args)
+        self.assertEqual(first.returncode, 0, first.stderr + first.stdout)
+        self.assertEqual(second.returncode, 0, second.stderr + second.stdout)
+        self.assertTrue(json.loads(second.stdout)["staged_release"]["reused"])
+
+    def test_unsafe_tar_member_blocks_plan(self) -> None:
+        unsafe = self.root / "unsafe.tar.gz"
+        data = b"escape"
+        with tarfile.open(unsafe, "w:gz") as archive:
+            member = tarfile.TarInfo("../../escape.txt")
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+        result = self.run_deployx(
+            "plan",
+            "prod",
+            "--app",
+            "web",
+            "--artifact",
+            str(unsafe),
+            "--release-root",
+            "/srv/apps",
+            "--service",
+            "web.service",
+            "--json",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["artifact"]["status"], "invalid")
+        self.assertTrue(payload["artifact"]["unsafe_members"])
 
     def test_registry_recipe_and_new_service_plan_are_read_only(self) -> None:
         self.register_new_service_objects()

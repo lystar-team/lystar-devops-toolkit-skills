@@ -1,6 +1,6 @@
 ---
 name: lystar-deploy-ops
-description: 通过现有 sshx 和 hostx 编排版本化部署、健康检查和可回滚发布。
+description: 通过现有 sshx 和 hostx 编排版本化或历史目录兼容部署、健康检查和可回滚发布。
 ---
 
 # LYStar Deploy Ops
@@ -9,9 +9,9 @@ description: 通过现有 sshx 和 hostx 编排版本化部署、健康检查和
 
 `deployx` 依赖已经安装并可用的 `lystar-ssh-ops`（`sshx`）和 `lystar-host-ops`（`hostx`）。它不保存 SSH 凭据，不直接建立 SSH 连接，也不复制主机服务状态采集逻辑。
 
-## 远端目录约定
+## 部署策略与目录约定
 
-`--release-root` 必须显式提供绝对远端目录。首版把应用目录固定为：
+`deployx` 提供两种正式策略。默认 `versioned-link` 保持原有参数和目录行为，现有调用不需要增加 `--strategy`：
 
 ```text
 <release-root>/<app>/
@@ -20,6 +20,22 @@ description: 通过现有 sshx 和 hostx 编排版本化部署、健康检查和
 ├── deployments/last.json       # 最近一次 apply/rollback 结果
 └── deployment.json             # 当前部署规格
 ```
+
+`directory-swap` 用于 Nginx 静态站点等必须保持历史线上路径不变的项目。它不要求修改 Nginx，也不把线上目录改成软链接：
+
+```text
+<live-path>/                     # Nginx 继续使用的原路径
+<state-root>/                    # 默认：<live-path 父目录>/.deployx/<live-path 名>
+├── releases/<release-id>/
+├── staging/
+├── failed/
+├── manifests/<release-id>.json
+├── deployments/last.json
+├── deployment.json
+└── lock/
+```
+
+选择规则：已有 systemd 服务和新项目使用 `versioned-link`；历史 Nginx 静态目录使用 `directory-swap`。不要为了采用 deployx 改写既有 Nginx 路径或强制迁移目录结构。
 
 制品首版固定为可读取的 `.tar.gz`。`release_id` 根据制品文件名和 SHA-256 前 12 位确定，同一个制品重复 apply 时复用已有 release 目录，不产生无法识别的重复版本。
 
@@ -56,13 +72,49 @@ deployx rollback prod \
   --release <release-id>
 ```
 
+历史 Nginx 静态目录使用原路径部署：
+
+```bash
+deployx plan prod \
+  --app mochu-admin \
+  --strategy directory-swap \
+  --service-type nginx-static \
+  --live-path /data/mochu_admin \
+  --state-root /data/.deployx/mochu_admin \
+  --nginx-server-name mochu.admin.example \
+  --artifact ./mochu-admin.tar.gz \
+  --health-check 'https://mochu.admin.example/|status=200|contains=<title>'
+
+deployx apply prod \
+  --app mochu-admin \
+  --strategy directory-swap \
+  --service-type nginx-static \
+  --live-path /data/mochu_admin \
+  --state-root /data/.deployx/mochu_admin \
+  --nginx-server-name mochu.admin.example \
+  --artifact ./mochu-admin.tar.gz \
+  --health-check 'https://mochu.admin.example/|status=200|contains=<title>'
+
+deployx status prod --app mochu-admin \
+  --strategy directory-swap --service-type nginx-static \
+  --live-path /data/mochu_admin --state-root /data/.deployx/mochu_admin \
+  --nginx-server-name mochu.admin.example
+
+deployx rollback prod --app mochu-admin \
+  --strategy directory-swap --service-type nginx-static \
+  --live-path /data/mochu_admin --state-root /data/.deployx/mochu_admin \
+  --nginx-server-name mochu.admin.example
+```
+
 所有命令支持 `--json`、`--timeout`。JSON 结果包含 `schema_version`、`kind`、`status`、`connection_status`、目标、应用和发布根目录。
 
 `plan` 的状态为 `ready`、`blocked` 或 `unavailable`：制品不存在、格式不符、校验不匹配、目标目录不可用、无法确认可用空间或服务未安装时不会返回可执行的 ready 计划。`status`/`history` 会读取远端 manifest；无效 manifest 会保留 warning，不会伪造版本信息。
 
-`apply` 的阶段依次为上传、`staged`、`switched`、`restarted`、`healthy`；失败会记录 `failed_stage`。制品上传默认通过 `sshx put --resume` 按 4 MiB 分片写入确定性的 staging 路径，上传中断后再次对同一制品执行 `apply` 会从远端已有偏移继续；暂存成功后才清理 staging 文件。上传或暂存失败会保留可续传制品，并在 `resume`、`cleanup` 和 `deployments/last.json` 中记录其位置和状态。切换后服务重启或健康检查失败时，只有存在可验证的上一版本才自动回退，并将结果标为 `rolled_back`；没有回退目标时保留现场并返回失败。`rollback` 未指定 `--release` 时选择按 manifest 时间排序的上一可用版本。
+`versioned-link` 的 `apply` 阶段依次为上传、`staged`、`switched`、`restarted`、`healthy`；失败会记录 `failed_stage`。制品上传默认通过 `sshx put --resume` 按 4 MiB 分片写入确定性的 staging 路径，上传中断后再次对同一制品执行 `apply` 会从远端已有偏移继续；暂存成功后才清理 staging 文件。上传或暂存失败会保留可续传制品，并在 `resume`、`cleanup` 和 `deployments/last.json` 中记录其位置和状态。切换后服务重启或健康检查失败时，只有存在可验证的上一版本才自动回退，并将结果标为 `rolled_back`；没有回退目标时保留现场并返回失败。`rollback` 未指定 `--release` 时选择按 manifest 时间排序的上一可用版本。
 
-`apply`/`rollback` 会通过 `sshx` 写入最小 manifest、`deployment.json` 和 `deployments/last.json`，并按 `--keep-releases` 清理旧版本；当前版本和保护性回退版本始终保留。健康检查使用 `hostx health`，不重复实现主机事实采集。
+`directory-swap` 在执行前检查 tar 路径安全、磁盘空间、同文件系统、部署锁、`nginx -t`、`server_name` 和 `root`/`alias` 绑定，并要求至少一个 HTTP 健康检查。发布时先把当前线上目录保留为回退版本，再把新目录移动到完全相同的 `--live-path`；验证失败立即恢复原目录。只有带合法 deployx manifest 的 release 才参与保留清理，没有 manifest 的历史或人工目录只报告 warning，绝不自动删除。
+
+`apply`/`rollback` 会通过 `sshx` 写入最小 manifest、`deployment.json` 和 `deployments/last.json`，并按 `--keep-releases` 清理旧版本；当前版本和保护性回退版本始终保留。systemd 主机检查使用 `hostx health`；`directory-swap` 的应用可用性通过显式 HTTP 检查确认。
 
 验证使用 fake `sshx`/`hostx` 和本地临时制品，不连接真实服务器。
 

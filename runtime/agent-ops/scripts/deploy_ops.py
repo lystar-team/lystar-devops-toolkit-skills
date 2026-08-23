@@ -30,6 +30,8 @@ PATH_KINDS = {"release", "config", "data", "log", "temporary", "external"}
 PORT_PROTOCOLS = {"tcp", "udp"}
 RECIPE_STAGE_NAMES = ("prepare", "install", "configure", "activate", "verify", "rollback")
 BUILTIN_RECIPE_ID = "tar.gz-systemd"
+STRATEGIES = {"versioned-link", "directory-swap"}
+SERVICE_TYPES = {"systemd", "nginx-static"}
 
 
 def utc_now() -> str:
@@ -49,11 +51,17 @@ def target_ref(alias: str) -> dict[str, str]:
     return {"alias": alias}
 
 
+def validate_remote_path(value: str, option: str) -> str:
+    text = str(value or "").strip()
+    if not text.startswith("/") or "\n" in text or "\t" in text:
+        raise ValueError(f"{option} 必须是绝对远端目录，且不能包含换行或制表符")
+    return posixpath.normpath(text)
+
+
 def validate_spec(app: str, release_root: str) -> None:
     if not APP_NAME_RE.fullmatch(app):
         raise ValueError("--app 必须是单级路径名，只能包含字母、数字、点、下划线和短横线")
-    if not release_root.startswith("/") or "\n" in release_root or "\t" in release_root:
-        raise ValueError("--release-root 必须是绝对远端目录，且不能包含换行或制表符")
+    validate_remote_path(release_root, "--release-root")
 
 
 def layout(app: str, release_root: str) -> dict[str, str]:
@@ -65,6 +73,51 @@ def layout(app: str, release_root: str) -> dict[str, str]:
         "current_link": posixpath.join(app_root, "current"),
         "deployments_root": posixpath.join(app_root, "deployments"),
     }
+
+
+def directory_swap_layout(app: str, live_path: str, state_root: str | None) -> dict[str, str]:
+    if not APP_NAME_RE.fullmatch(app):
+        raise ValueError("--app 必须是单级路径名，只能包含字母、数字、点、下划线和短横线")
+    live = validate_remote_path(live_path, "--live-path")
+    if live == "/":
+        raise ValueError("--live-path 不能是根目录")
+    state = validate_remote_path(
+        state_root or posixpath.join(posixpath.dirname(live), ".deployx", posixpath.basename(live)),
+        "--state-root",
+    )
+    if state == live or state.startswith(live.rstrip("/") + "/") or live.startswith(state.rstrip("/") + "/"):
+        raise ValueError("--state-root 必须与 --live-path 相互独立，不能互相包含")
+    return {
+        "live_path": live,
+        "state_root": state,
+        "releases_root": posixpath.join(state, "releases"),
+        "staging_root": posixpath.join(state, "staging"),
+        "failed_root": posixpath.join(state, "failed"),
+        "manifests_root": posixpath.join(state, "manifests"),
+        "deployments_root": posixpath.join(state, "deployments"),
+        "deployment_file": posixpath.join(state, "deployment.json"),
+        "lock_root": posixpath.join(state, "lock"),
+    }
+
+
+def safe_tar_member(member: tarfile.TarInfo) -> str | None:
+    name = str(member.name or "")
+    if not name or name.startswith("/"):
+        return "制品包含空路径或绝对路径"
+    normalized = posixpath.normpath(name)
+    if normalized == ".." or normalized.startswith("../"):
+        return f"制品成员越过解压目录：{name}"
+    if member.isdev() or member.isfifo():
+        return f"制品包含不允许的特殊文件：{name}"
+    if member.issym() or member.islnk():
+        link = str(member.linkname or "")
+        if not link or link.startswith("/"):
+            return f"制品链接目标不安全：{name} -> {link}"
+        base = posixpath.dirname(normalized) if member.issym() else ""
+        target = posixpath.normpath(posixpath.join(base, link))
+        if target == ".." or target.startswith("../"):
+            return f"制品链接越过解压目录：{name} -> {link}"
+    return None
 
 
 def artifact_info(path_text: str, expected_sha256: str | None) -> dict[str, Any]:
@@ -79,6 +132,8 @@ def artifact_info(path_text: str, expected_sha256: str | None) -> dict[str, Any]
         "expected_sha256": expected_sha256.lower() if expected_sha256 else None,
         "status": "missing",
         "error": None,
+        "unpacked_bytes": None,
+        "unsafe_members": [],
     }
     if not path.is_file():
         info["error"] = "本地制品不存在或不是普通文件"
@@ -95,7 +150,15 @@ def artifact_info(path_text: str, expected_sha256: str | None) -> dict[str, Any]
                 digest.update(chunk)
         info["sha256"] = digest.hexdigest()
         with tarfile.open(path, mode="r:gz") as archive:
-            info["member_count"] = len(archive.getmembers())
+            members = archive.getmembers()
+            info["member_count"] = len(members)
+            info["unpacked_bytes"] = sum(max(0, int(member.size or 0)) for member in members)
+            unsafe = [error for member in members if (error := safe_tar_member(member))]
+            if unsafe:
+                info["status"] = "invalid"
+                info["unsafe_members"] = unsafe[:20]
+                info["error"] = unsafe[0]
+                return info
     except (OSError, tarfile.TarError) as exc:
         info["status"] = "invalid"
         info["error"] = f"无法读取 tar.gz 制品：{exc}"
@@ -615,6 +678,351 @@ def inspect_target(alias: str, app: str, release_root: str, timeout: int) -> dic
         "connection_status": "ok",
         "error": None,
         "inspection": inspection,
+    }
+
+
+def directory_inspect_command(paths: dict[str, str], nginx_server_name: str | None) -> str:
+    quoted = {key: shlex.quote(value) for key, value in paths.items()}
+    server = shlex.quote(nginx_server_name or "")
+    return f"""# deployx:directory-inspect
+live_path={quoted['live_path']}
+state_root={quoted['state_root']}
+releases_root={quoted['releases_root']}
+manifests_root={quoted['manifests_root']}
+deployments_root={quoted['deployments_root']}
+deployment_file={quoted['deployment_file']}
+lock_root={quoted['lock_root']}
+nginx_server_name={server}
+printf 'live_path\t%s\n' "$live_path"
+printf 'state_root\t%s\n' "$state_root"
+printf 'live_exists\t%s\n' "$(test -e "$live_path" && echo true || echo false)"
+printf 'live_is_dir\t%s\n' "$(test -d "$live_path" && echo true || echo false)"
+printf 'state_exists\t%s\n' "$(test -d "$state_root" && echo true || echo false)"
+if [ -d "$live_path" ]; then
+    printf 'live_owner\t%s\n' "$(stat -c '%U:%G' "$live_path" 2>/dev/null || true)"
+    printf 'live_mode\t%s\n' "$(stat -c '%a' "$live_path" 2>/dev/null || true)"
+    printf 'live_device\t%s\n' "$(stat -c '%d' "$live_path" 2>/dev/null || true)"
+    printf 'live_baseline\t%s\n' "$(stat -c '%d:%i:%Y:%s' "$live_path" 2>/dev/null || true)"
+    du -sk "$live_path" 2>/dev/null | awk '{{printf "live_bytes\t%s\n", $1 * 1024}}'
+    if [ -r "$live_path/index.html" ] && command -v sha256sum >/dev/null 2>&1; then
+        printf 'entry_sha256\t%s\n' "$(sha256sum "$live_path/index.html" | sed 's/[[:space:]].*$//')"
+    fi
+fi
+state_parent=$(dirname "$state_root")
+if [ -d "$state_root" ]; then state_probe=$state_root; else state_probe=$state_parent; fi
+while [ ! -d "$state_probe" ] && [ "$state_probe" != "/" ]; do state_probe=$(dirname "$state_probe"); done
+if [ -d "$state_probe" ]; then
+    printf 'state_device\t%s\n' "$(stat -c '%d' "$state_probe" 2>/dev/null || true)"
+    df -Pk "$state_probe" 2>/dev/null | awk 'END {{printf "available_bytes\\t%s\\n", $4 * 1024}}'
+fi
+if [ -r "$deployment_file" ]; then
+    printf 'deployment_spec\t'
+    tr '\n' ' ' < "$deployment_file"
+    printf '\n'
+fi
+if [ -r "$deployments_root/last.json" ]; then
+    printf 'last_result\t'
+    tr '\n' ' ' < "$deployments_root/last.json"
+    printf '\n'
+fi
+if [ -r "$lock_root/active/info.json" ]; then
+    printf 'active_lock\t'
+    tr '\n' ' ' < "$lock_root/active/info.json"
+    printf '\n'
+fi
+for manifest in "$manifests_root"/*.json; do
+    [ -f "$manifest" ] || continue
+    printf 'manifest\t%s\t' "$(basename "$manifest" .json)"
+    tr '\n' ' ' < "$manifest"
+    printf '\n'
+done
+for release_path in "$releases_root"/*; do
+    [ -d "$release_path" ] || continue
+    printf 'release_path\t%s\n' "$(basename "$release_path")"
+done
+printf 'nginx_available\t%s\n' "$(command -v nginx >/dev/null 2>&1 && echo true || echo false)"
+if command -v nginx >/dev/null 2>&1; then
+    if nginx -t >/dev/null 2>&1; then printf 'nginx_test\tpass\n'; else printf 'nginx_test\tfail\n'; fi
+    if [ -n "$nginx_server_name" ]; then
+        nginx_dump=$(nginx -T 2>&1 || true)
+        if printf '%s' "$nginx_dump" | grep -Fq "server_name $nginx_server_name"; then
+            printf 'nginx_server_found\ttrue\n'
+        else
+            printf 'nginx_server_found\tfalse\n'
+        fi
+        if printf '%s' "$nginx_dump" | grep -Fq "root $live_path" || printf '%s' "$nginx_dump" | grep -Fq "alias $live_path"; then
+            printf 'nginx_root_found\ttrue\n'
+        else
+            printf 'nginx_root_found\tfalse\n'
+        fi
+    fi
+fi
+"""
+
+
+def parse_directory_inspection(text: str, paths: dict[str, str]) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        **paths,
+        "live_exists": False,
+        "live_is_dir": False,
+        "state_exists": False,
+        "live_owner": "",
+        "live_mode": "",
+        "live_device": "",
+        "state_device": "",
+        "live_baseline": "",
+        "live_bytes": None,
+        "available_bytes": None,
+        "entry_sha256": "",
+        "deployment_spec": {},
+        "last_result": {},
+        "active_lock": {},
+        "manifests": [],
+        "release_paths": [],
+        "nginx_available": False,
+        "nginx_test": "unknown",
+        "nginx_server_found": False,
+        "nginx_root_found": False,
+        "warnings": [],
+    }
+    bool_keys = {
+        "live_exists", "live_is_dir", "state_exists", "nginx_available",
+        "nginx_server_found", "nginx_root_found",
+    }
+    int_keys = {"live_bytes", "available_bytes"}
+    text_keys = {
+        "live_path", "state_root", "live_owner", "live_mode", "live_device",
+        "state_device", "live_baseline", "entry_sha256", "nginx_test",
+    }
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t", 2)
+        key = parts[0]
+        if key in bool_keys and len(parts) >= 2:
+            result[key] = parse_bool(parts[1])
+        elif key in int_keys and len(parts) >= 2:
+            try:
+                result[key] = int(parts[1])
+            except ValueError:
+                result["warnings"].append(f"无法解析 {key}：{parts[1][:100]}")
+        elif key in text_keys and len(parts) >= 2:
+            result[key] = parts[1]
+        elif key in {"deployment_spec", "last_result", "active_lock"} and len(parts) >= 2:
+            try:
+                value = json.loads(parts[1])
+            except json.JSONDecodeError:
+                result["warnings"].append(f"{key} 不是有效 JSON")
+                continue
+            if isinstance(value, dict):
+                result[key] = value
+        elif key == "manifest" and len(parts) >= 3:
+            release_id = parts[1]
+            try:
+                value = json.loads(parts[2])
+            except json.JSONDecodeError:
+                result["warnings"].append(f"release manifest 无法解析：{release_id}")
+                continue
+            if isinstance(value, dict):
+                value = dict(value)
+                value.setdefault("release_id", release_id)
+                result["manifests"].append(value)
+        elif key == "release_path" and len(parts) >= 2:
+            result["release_paths"].append(parts[1])
+    known_ids = {str(item.get("release_id") or "") for item in result["manifests"]}
+    result["unmanaged_release_paths"] = [
+        release_id for release_id in result["release_paths"] if release_id not in known_ids
+    ]
+    if result["unmanaged_release_paths"]:
+        result["warnings"].append("发现没有 deployx manifest 的历史目录，保留现场不清理")
+    return result
+
+
+def inspect_directory_target(
+    alias: str,
+    app: str,
+    live_path: str,
+    state_root: str | None,
+    nginx_server_name: str | None,
+    timeout: int,
+) -> dict[str, Any]:
+    paths = directory_swap_layout(app, live_path, state_root)
+    remote = run_ssh(alias, directory_inspect_command(paths, nginx_server_name), timeout)
+    if remote.get("transport") != "ok":
+        return {
+            "status": "unavailable",
+            "connection_status": "unavailable",
+            "error": remote.get("error") or "sshx 不可用",
+            "inspection": None,
+            "paths": paths,
+        }
+    try:
+        exit_code = int(remote.get("exit_code", 0))
+    except (TypeError, ValueError):
+        exit_code = 1
+    if exit_code not in (0, None):
+        return {
+            "status": "failed",
+            "connection_status": "ok",
+            "error": trim_error(remote.get("stderr")) or "历史目录检查失败",
+            "inspection": None,
+            "paths": paths,
+        }
+    inspection = parse_directory_inspection(str(remote.get("stdout", "")), paths)
+    return {
+        "status": "partial" if inspection["warnings"] else "ok",
+        "connection_status": "ok",
+        "error": None,
+        "inspection": inspection,
+        "paths": paths,
+    }
+
+
+def directory_base_payload(kind: str, alias: str, app: str, paths: dict[str, str]) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": kind,
+        "target": target_ref(alias),
+        "app": app,
+        "strategy": "directory-swap",
+        "service_type": "nginx-static",
+        "live_path": paths["live_path"],
+        "state_root": paths["state_root"],
+        "collected_at": utc_now(),
+    }
+
+
+def parse_http_check(spec: str) -> dict[str, Any]:
+    parts = [part.strip() for part in str(spec).split("|") if part.strip()]
+    if not parts:
+        raise ValueError("HTTP 健康检查不能为空")
+    url = parts[0]
+    if url.startswith("http:") and not url.startswith("http://"):
+        url = url.split(":", 1)[1]
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"不支持的 HTTP 健康检查：{spec}")
+    result: dict[str, Any] = {"spec": spec, "url": url, "status": 200}
+    for option in parts[1:]:
+        key, separator, value = option.partition("=")
+        if not separator:
+            raise ValueError(f"HTTP 健康检查选项格式错误：{option}")
+        if key == "status":
+            result["status"] = int(value)
+        elif key == "contains":
+            result["contains"] = value
+        elif key == "json":
+            path, marker, expected = value.partition(":")
+            if not marker or not path:
+                raise ValueError(f"JSON 检查格式应为 json=字段:期望值：{option}")
+            try:
+                expected_value = json.loads(expected)
+            except json.JSONDecodeError:
+                expected_value = expected
+            result["json_path"] = path
+            result["json_expected"] = expected_value
+        else:
+            raise ValueError(f"不支持的 HTTP 健康检查选项：{key}")
+    return result
+
+
+def application_health_specs(raw: list[str] | None) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for item in raw or []:
+        for spec in (part.strip() for part in item.split(",") if part.strip()):
+            if spec.startswith(("http://", "https://", "http:http://", "http:https://")):
+                values.append(parse_http_check(spec))
+    return values
+
+
+def host_health_specs(raw: list[str] | None) -> list[str]:
+    values: list[str] = []
+    for item in raw or []:
+        for spec in (part.strip() for part in item.split(",") if part.strip()):
+            if not spec.startswith(("http://", "https://", "http:http://", "http:https://")):
+                values.append(spec)
+    return values
+
+
+def json_path_value(value: Any, path: str) -> tuple[bool, Any]:
+    current = value
+    for part in path.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return False, None
+    return True, current
+
+
+def run_application_health(
+    alias: str,
+    checks: list[dict[str, Any]],
+    host_header: str | None,
+    timeout: int,
+) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
+    for index, check in enumerate(checks):
+        header = f"-H {shlex.quote('Host: ' + host_header)}" if host_header else ""
+        command = f"""set -eu
+body=$(mktemp /tmp/deployx-http.XXXXXX)
+trap 'rm -f "$body"' EXIT HUP INT TERM
+code=$(curl --location --silent --show-error --output "$body" --write-out '%{{http_code}}' {header} {shlex.quote(str(check['url']))})
+printf 'DEPLOYX_HTTP_CODE\t%s\n' "$code"
+printf 'DEPLOYX_HTTP_BODY_BEGIN\n'
+head -c 32768 "$body"
+printf '\nDEPLOYX_HTTP_BODY_END\n'
+"""
+        step = remote_step(alias, command, timeout, f"http-{index + 1}")
+        if step.get("status") != "ok":
+            results.append({**check, "status": step.get("status"), "error": step.get("error")})
+            continue
+        output = str(step.get("stdout", ""))
+        code_match = re.search(r"^DEPLOYX_HTTP_CODE\t(\d+)$", output, re.MULTILINE)
+        body_match = re.search(
+            r"DEPLOYX_HTTP_BODY_BEGIN\n(.*?)\nDEPLOYX_HTTP_BODY_END",
+            output,
+            re.DOTALL,
+        )
+        actual_code = int(code_match.group(1)) if code_match else None
+        body = body_match.group(1) if body_match else ""
+        errors: list[str] = []
+        if actual_code != check["status"]:
+            errors.append(f"HTTP 状态码为 {actual_code}，期望 {check['status']}")
+        expected_text = check.get("contains")
+        if expected_text is not None and str(expected_text) not in body:
+            errors.append("响应体不包含期望内容")
+        if check.get("json_path"):
+            try:
+                json_body = json.loads(body)
+            except json.JSONDecodeError:
+                errors.append("响应体不是有效 JSON")
+            else:
+                found, actual = json_path_value(json_body, str(check["json_path"]))
+                if not found or actual != check.get("json_expected"):
+                    errors.append(
+                        f"JSON 字段 {check['json_path']}={actual!r}，期望 {check.get('json_expected')!r}"
+                    )
+        results.append(
+            {
+                **check,
+                "status": "pass" if not errors else "fail",
+                "actual_status": actual_code,
+                "errors": errors,
+            }
+        )
+    statuses = {str(item.get("status")) for item in results}
+    if "unavailable" in statuses:
+        status = "unavailable"
+        connection_status = "unavailable"
+    elif "failed" in statuses or "fail" in statuses:
+        status = "fail"
+        connection_status = "ok"
+    else:
+        status = "pass"
+        connection_status = "ok"
+    return {
+        "status": status,
+        "connection_status": connection_status,
+        "checks": results,
     }
 
 
@@ -2365,7 +2773,1024 @@ def service_create(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
+def directory_current_release(inspection: dict[str, Any]) -> dict[str, Any] | None:
+    spec = inspection.get("deployment_spec")
+    if not isinstance(spec, dict):
+        return None
+    release_id = str(spec.get("current_release") or spec.get("release_id") or "")
+    if not release_id:
+        return None
+    manifest = next(
+        (
+            item for item in inspection.get("manifests", [])
+            if str(item.get("release_id") or "") == release_id
+        ),
+        None,
+    )
+    if manifest:
+        return {**manifest, "path": inspection.get("live_path"), "state": "active"}
+    return {
+        "release_id": release_id,
+        "path": inspection.get("live_path"),
+        "state": "active",
+        "artifact_sha256": str(spec.get("artifact_sha256") or ""),
+        "created_at": str(spec.get("finished_at") or spec.get("started_at") or ""),
+    }
+
+
+def legacy_release_id(inspection: dict[str, Any]) -> str:
+    source = str(inspection.get("entry_sha256") or inspection.get("live_baseline") or utc_now())
+    return "legacy-" + hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+
+
+def directory_plan(args: argparse.Namespace) -> dict[str, Any]:
+    if args.service_type != "nginx-static":
+        raise ValueError("directory-swap 首版只支持 --service-type nginx-static")
+    if not args.live_path:
+        raise ValueError("directory-swap 必须提供 --live-path")
+    if not args.nginx_server_name:
+        raise ValueError("nginx-static 必须提供 --nginx-server-name")
+    artifact = artifact_info(args.artifact, args.artifact_sha256)
+    checks = application_health_specs(args.health_check)
+    inspection_result = inspect_directory_target(
+        args.alias,
+        args.app,
+        args.live_path,
+        args.state_root,
+        args.nginx_server_name,
+        args.timeout,
+    )
+    paths = inspection_result["paths"]
+    inspection = inspection_result.get("inspection")
+    preconditions: list[dict[str, str]] = []
+    preconditions.append(
+        check_status(
+            "artifact",
+            "pass" if artifact.get("status") == "ok" else "fail",
+            "本地 tar.gz 制品可读且安全检查通过"
+            if artifact.get("status") == "ok"
+            else str(artifact.get("error") or "制品不可用"),
+        )
+    )
+    if inspection is None:
+        for name, detail in (
+            ("live_path", "无法读取历史线上目录"),
+            ("filesystem", "无法确认线上目录与状态目录的文件系统"),
+            ("disk_space", "无法读取可用空间"),
+            ("nginx_binding", "无法读取 Nginx 绑定"),
+        ):
+            preconditions.append(check_status(name, "unknown", detail))
+    else:
+        if inspection.get("live_exists") and inspection.get("live_is_dir"):
+            preconditions.append(check_status("live_path", "pass", paths["live_path"]))
+        else:
+            preconditions.append(check_status("live_path", "fail", "历史线上路径不存在或不是目录"))
+        live_device = str(inspection.get("live_device") or "")
+        state_device = str(inspection.get("state_device") or "")
+        if live_device and state_device and live_device == state_device:
+            preconditions.append(check_status("filesystem", "pass", f"device={live_device}"))
+        elif live_device and state_device:
+            preconditions.append(check_status("filesystem", "fail", "live_path 与 state_root 不在同一文件系统"))
+        else:
+            preconditions.append(check_status("filesystem", "unknown", "无法确认目录设备号"))
+        required_bytes = int(artifact.get("unpacked_bytes") or 0) + int(inspection.get("live_bytes") or 0)
+        required_bytes += max(int(artifact.get("bytes") or 0), required_bytes // 10)
+        available = inspection.get("available_bytes")
+        if available is None:
+            preconditions.append(check_status("disk_space", "unknown", "目标主机未返回可用空间"))
+        elif int(available) < required_bytes:
+            preconditions.append(
+                check_status("disk_space", "fail", f"available_bytes={available}, required_bytes={required_bytes}")
+            )
+        else:
+            preconditions.append(
+                check_status("disk_space", "pass", f"available_bytes={available}, required_bytes={required_bytes}")
+            )
+        if not inspection.get("nginx_available"):
+            preconditions.append(check_status("nginx_binding", "fail", "目标主机未安装 nginx 命令"))
+        elif inspection.get("nginx_test") != "pass":
+            preconditions.append(check_status("nginx_binding", "fail", "nginx -t 未通过"))
+        elif not inspection.get("nginx_server_found"):
+            preconditions.append(
+                check_status("nginx_binding", "fail", f"未找到 server_name {args.nginx_server_name}")
+            )
+        elif not inspection.get("nginx_root_found"):
+            preconditions.append(
+                check_status("nginx_binding", "fail", f"Nginx root/alias 未指向 {paths['live_path']}")
+            )
+        else:
+            preconditions.append(check_status("nginx_binding", "pass", "Nginx 线上目录绑定一致"))
+        if inspection.get("active_lock"):
+            preconditions.append(check_status("deployment_lock", "fail", "已有部署操作持有目录锁"))
+        else:
+            preconditions.append(check_status("deployment_lock", "pass", "当前没有进行中的目录切换"))
+    if checks:
+        preconditions.append(check_status("application_health", "pass", f"已配置 {len(checks)} 个 HTTP 检查"))
+    else:
+        preconditions.append(check_status("application_health", "fail", "directory-swap 至少需要一个 HTTP 健康检查"))
+    statuses = {item["status"] for item in preconditions}
+    if inspection_result.get("connection_status") == "unavailable":
+        status = "unavailable"
+    elif "fail" in statuses or "unknown" in statuses:
+        status = "blocked"
+    else:
+        status = "ready"
+    candidate_release = release_id_for(artifact) if artifact.get("sha256") else None
+    current = directory_current_release(inspection) if inspection else None
+    management_status = "managed" if current else "legacy_unmanaged"
+    payload = directory_base_payload("deployment_plan", args.alias, args.app, paths)
+    payload.update(
+        {
+            "status": status,
+            "connection_status": inspection_result.get("connection_status"),
+            "management_status": management_status,
+            "artifact": artifact,
+            "current_release": current,
+            "candidate_release": {
+                "release_id": candidate_release,
+                "artifact_name": artifact.get("name"),
+                "artifact_sha256": artifact.get("sha256"),
+                "state": "candidate" if artifact.get("status") == "ok" else "invalid",
+            },
+            "baseline": {
+                "live": inspection.get("live_baseline") if inspection else None,
+                "entry_sha256": inspection.get("entry_sha256") if inspection else None,
+                "current_release": current.get("release_id") if current else None,
+            },
+            "paths": paths,
+            "nginx": {
+                "server_name": args.nginx_server_name,
+                "binding_status": next(
+                    (item["status"] for item in preconditions if item["name"] == "nginx_binding"),
+                    "unknown",
+                ),
+            },
+            "application_health_checks": checks,
+            "preconditions": preconditions,
+            "actions": [
+                f"上传并安全解压到 {paths['staging_root']}",
+                f"保留当前线上目录到 {paths['releases_root']}",
+                f"将新版本切换为原路径 {paths['live_path']}",
+                "执行 nginx -t 和应用 HTTP 检查",
+                "验证失败时恢复原线上目录",
+            ],
+            "warnings": list(inspection.get("warnings", [])) if inspection else [],
+        }
+    )
+    return payload
+
+
+def directory_lock_command(paths: dict[str, str], operation_id: str, started_at: str) -> str:
+    info = {
+        "schema_version": SCHEMA_VERSION,
+        "operation_id": operation_id,
+        "started_at": started_at,
+    }
+    return f"""set -eu
+lock_root={shlex.quote(paths['lock_root'])}
+active="$lock_root/active"
+mkdir -p "$lock_root"
+if ! mkdir "$active" 2>/dev/null; then
+    if [ -r "$active/info.json" ]; then cat "$active/info.json" >&2; fi
+    echo '已有部署操作持有目录锁' >&2
+    exit 73
+fi
+printf '%s\n' {shlex.quote(json.dumps(info, ensure_ascii=False, separators=(',', ':')))} > "$active/info.json"
+printf 'DEPLOYX_LOCK_ACQUIRED\t%s\n' {shlex.quote(operation_id)}
+"""
+
+
+def acquire_directory_lock(
+    alias: str, paths: dict[str, str], operation_id: str, started_at: str, timeout: int
+) -> dict[str, Any]:
+    return remote_step(alias, directory_lock_command(paths, operation_id, started_at), timeout, "lock")
+
+
+def release_directory_lock(alias: str, paths: dict[str, str], operation_id: str, timeout: int) -> dict[str, Any]:
+    command = f"""set -eu
+active={shlex.quote(posixpath.join(paths['lock_root'], 'active'))}
+if [ ! -d "$active" ]; then exit 0; fi
+if [ -r "$active/info.json" ] && ! grep -Fq {shlex.quote(operation_id)} "$active/info.json"; then
+    echo '目录锁不属于当前操作，拒绝释放' >&2
+    exit 74
+fi
+rm -rf -- "$active"
+printf 'DEPLOYX_LOCK_RELEASED\t%s\n' {shlex.quote(operation_id)}
+"""
+    return remote_step(alias, command, timeout, "unlock")
+
+
+def directory_stage_command(
+    paths: dict[str, str],
+    artifact_remote: str,
+    artifact_sha256: str,
+    release_id: str,
+    operation_id: str,
+) -> str:
+    stage_path = posixpath.join(paths["staging_root"], f"release-{release_id}.{operation_id}")
+    return f"""set -eu
+artifact={shlex.quote(artifact_remote)}
+stage_path={shlex.quote(stage_path)}
+live_path={shlex.quote(paths['live_path'])}
+mkdir -p {shlex.quote(paths['staging_root'])} {shlex.quote(paths['releases_root'])} {shlex.quote(paths['failed_root'])} {shlex.quote(paths['manifests_root'])} {shlex.quote(paths['deployments_root'])}
+test -f "$artifact"
+actual_sha=$(sha256sum "$artifact" | sed 's/[[:space:]].*$//')
+test "$actual_sha" = {shlex.quote(artifact_sha256)}
+tar -tzf "$artifact" >/dev/null
+rm -rf -- "$stage_path"
+mkdir -p "$stage_path"
+tar -xzf "$artifact" -C "$stage_path"
+test -s "$stage_path/index.html"
+owner_group=$(stat -c '%U:%G' "$live_path")
+mode=$(stat -c '%a' "$live_path")
+chown -R "$owner_group" "$stage_path"
+chmod "$mode" "$stage_path"
+if command -v restorecon >/dev/null 2>&1; then restorecon -R "$stage_path" >/dev/null 2>&1 || true; fi
+printf 'DEPLOYX_DIRECTORY_STAGE\t%s\n' "$stage_path"
+"""
+
+
+def directory_switch_command(
+    paths: dict[str, str],
+    candidate_path: str,
+    previous_id: str,
+    expected_baseline: str,
+) -> str:
+    previous_path = posixpath.join(paths["releases_root"], previous_id)
+    return f"""set -eu
+live_path={shlex.quote(paths['live_path'])}
+candidate_path={shlex.quote(candidate_path)}
+previous_path={shlex.quote(previous_path)}
+test -d "$live_path"
+test -d "$candidate_path"
+actual_baseline=$(stat -c '%d:%i:%Y:%s' "$live_path")
+if [ "$actual_baseline" != {shlex.quote(expected_baseline)} ]; then
+    echo "线上目录基线已经变化：$actual_baseline" >&2
+    exit 75
+fi
+if [ -e "$previous_path" ]; then
+    echo '保护性回退目录已经存在，拒绝覆盖' >&2
+    exit 76
+fi
+mv "$live_path" "$previous_path"
+if ! mv "$candidate_path" "$live_path"; then
+    mv "$previous_path" "$live_path" || true
+    exit 77
+fi
+printf 'DEPLOYX_DIRECTORY_SWITCH\t%s\t%s\n' "$live_path" "$previous_path"
+"""
+
+
+def directory_recovery_command(
+    paths: dict[str, str], previous_id: str, operation_id: str
+) -> str:
+    previous_path = posixpath.join(paths["releases_root"], previous_id)
+    failed_path = posixpath.join(paths["failed_root"], operation_id)
+    return f"""set -eu
+live_path={shlex.quote(paths['live_path'])}
+previous_path={shlex.quote(previous_path)}
+failed_path={shlex.quote(failed_path)}
+test -d "$live_path"
+test -d "$previous_path"
+if [ -e "$failed_path" ]; then
+    echo '失败现场目录已经存在，拒绝覆盖' >&2
+    exit 78
+fi
+mv "$live_path" "$failed_path"
+if ! mv "$previous_path" "$live_path"; then
+    mv "$failed_path" "$live_path" || true
+    exit 79
+fi
+printf 'DEPLOYX_DIRECTORY_RECOVERY\t%s\t%s\n' "$live_path" "$failed_path"
+"""
+
+
+def directory_runtime_health(args: argparse.Namespace, paths: dict[str, str]) -> dict[str, Any]:
+    nginx = remote_step(args.alias, "nginx -t", args.timeout, "nginx-test")
+    if nginx.get("status") != "ok":
+        return {
+            "status": nginx.get("status", "failed"),
+            "connection_status": nginx.get("connection_status", "ok"),
+            "failed_stage": "nginx-test",
+            "error": nginx.get("error") or "nginx -t 未通过",
+            "nginx": nginx,
+            "application": None,
+        }
+    application = run_application_health(
+        args.alias,
+        application_health_specs(args.health_check),
+        args.nginx_server_name,
+        args.timeout,
+    )
+    if application.get("status") != "pass":
+        return {
+            "status": "unavailable" if application.get("status") == "unavailable" else "failed",
+            "connection_status": application.get("connection_status", "ok"),
+            "failed_stage": "application-health",
+            "error": "应用 HTTP 健康检查失败",
+            "nginx": nginx,
+            "application": application,
+        }
+    host_specs = host_health_specs(args.health_check)
+    host = run_host_health(args.alias, host_specs, args.timeout) if host_specs else {
+        "status": "not_requested",
+        "connection_status": "not_requested",
+    }
+    if host_specs and host.get("status") not in {"pass", "warn"}:
+        return {
+            "status": "unavailable" if host.get("connection_status") == "unavailable" else "failed",
+            "connection_status": host.get("connection_status", "ok"),
+            "failed_stage": "host-health",
+            "error": host.get("error") or "主机健康检查失败",
+            "nginx": nginx,
+            "application": application,
+            "host": host,
+        }
+    return {
+        "status": "healthy",
+        "connection_status": "ok",
+        "nginx": nginx,
+        "application": application,
+        "host": host,
+        "live_path": paths["live_path"],
+    }
+
+
+def directory_persist_command(
+    paths: dict[str, str],
+    deployment: dict[str, Any] | None,
+    manifests: list[dict[str, Any]],
+    last_result: dict[str, Any],
+    operation_id: str,
+) -> str:
+    writes: list[str] = []
+    for manifest in manifests:
+        release_id = str(manifest["release_id"])
+        target = posixpath.join(paths["manifests_root"], f"{release_id}.json")
+        temp = target + f".{operation_id}.tmp"
+        value = json.dumps(manifest, ensure_ascii=False, separators=(",", ":"))
+        writes.append(
+            f"printf '%s\\n' {shlex.quote(value)} > {shlex.quote(temp)}\n"
+            f"mv -f {shlex.quote(temp)} {shlex.quote(target)}"
+        )
+    if deployment is not None:
+        value = json.dumps(deployment, ensure_ascii=False, separators=(",", ":"))
+        temp = paths["deployment_file"] + f".{operation_id}.tmp"
+        writes.append(
+            f"printf '%s\\n' {shlex.quote(value)} > {shlex.quote(temp)}\n"
+            f"mv -f {shlex.quote(temp)} {shlex.quote(paths['deployment_file'])}"
+        )
+    last_value = json.dumps(last_result, ensure_ascii=False, separators=(",", ":"))
+    last_path = posixpath.join(paths["deployments_root"], "last.json")
+    last_temp = last_path + f".{operation_id}.tmp"
+    writes.append(
+        f"printf '%s\\n' {shlex.quote(last_value)} > {shlex.quote(last_temp)}\n"
+        f"mv -f {shlex.quote(last_temp)} {shlex.quote(last_path)}"
+    )
+    body = "\n".join(writes)
+    return f"""set -eu
+mkdir -p {shlex.quote(paths['state_root'])} {shlex.quote(paths['manifests_root'])} {shlex.quote(paths['deployments_root'])}
+{body}
+printf 'DEPLOYX_DIRECTORY_STATE_WRITTEN\ttrue\n'
+"""
+
+
+def persist_directory_state(
+    alias: str,
+    paths: dict[str, str],
+    deployment: dict[str, Any] | None,
+    manifests: list[dict[str, Any]],
+    last_result: dict[str, Any],
+    operation_id: str,
+    timeout: int,
+) -> dict[str, Any]:
+    return remote_step(
+        alias,
+        directory_persist_command(paths, deployment, manifests, last_result, operation_id),
+        timeout,
+        "state",
+    )
+
+
+def prune_directory_releases(
+    alias: str,
+    paths: dict[str, str],
+    manifests: list[dict[str, Any]],
+    current_id: str,
+    previous_id: str,
+    keep_releases: int,
+    timeout: int,
+) -> dict[str, Any]:
+    ordered = sorted(
+        manifests,
+        key=lambda item: (str(item.get("created_at") or ""), str(item.get("release_id") or "")),
+        reverse=True,
+    )
+    keep: list[str] = []
+    for release_id in (current_id, previous_id):
+        if release_id and release_id not in keep:
+            keep.append(release_id)
+    for item in ordered:
+        release_id = str(item.get("release_id") or "")
+        if release_id and release_id not in keep:
+            keep.append(release_id)
+        if len(keep) >= keep_releases:
+            break
+    removable = [
+        str(item.get("release_id") or "")
+        for item in manifests
+        if str(item.get("release_id") or "") not in keep
+    ]
+    commands = []
+    for release_id in removable:
+        if not RELEASE_ID_RE.fullmatch(release_id):
+            continue
+        commands.append(
+            f"if [ -d {shlex.quote(posixpath.join(paths['releases_root'], release_id))} ]; then "
+            f"rm -rf -- {shlex.quote(posixpath.join(paths['releases_root'], release_id))}; "
+            f"printf 'DEPLOYX_PRUNE_REMOVED\\t%s\\n' {shlex.quote(release_id)}; fi"
+        )
+        commands.append(f"rm -f -- {shlex.quote(posixpath.join(paths['manifests_root'], release_id + '.json'))}")
+    step = remote_step(alias, "set -eu\n" + "\n".join(commands), timeout, "prune")
+    return {**step, "kept": keep, "eligible": removable}
+
+
+def directory_release_manifest(
+    release_id: str,
+    artifact: dict[str, Any] | None,
+    created_at: str,
+    source: str,
+    paths: dict[str, str],
+    entry_sha256: str = "",
+) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "release_id": release_id,
+        "artifact_name": str((artifact or {}).get("name") or ""),
+        "artifact_sha256": str((artifact or {}).get("sha256") or ""),
+        "created_at": created_at,
+        "source": source,
+        "strategy": "directory-swap",
+        "live_path": paths["live_path"],
+        "entry_sha256": entry_sha256,
+        "state": "available",
+    }
+
+
+def directory_apply(args: argparse.Namespace) -> dict[str, Any]:
+    started_at = utc_now()
+    plan_payload = directory_plan(args)
+    paths = plan_payload["paths"]
+    payload = directory_base_payload("deployment_apply", args.alias, args.app, paths)
+    operation_id = "deploy-" + uuid.uuid4().hex[:12]
+    payload.update(
+        {
+            "operation": "apply",
+            "deployment_id": operation_id,
+            "started_at": started_at,
+            "status": plan_payload.get("status"),
+            "connection_status": plan_payload.get("connection_status"),
+            "artifact": plan_payload.get("artifact"),
+            "candidate_release": plan_payload.get("candidate_release"),
+            "current_release": plan_payload.get("current_release"),
+            "warnings": list(plan_payload.get("warnings", [])),
+            "stages": [],
+        }
+    )
+    if plan_payload.get("status") != "ready":
+        payload.update(
+            {
+                "stage": "failed",
+                "failed_stage": "precondition",
+                "error": "部署前置条件未满足",
+                "finished_at": utc_now(),
+                "plan": plan_payload,
+            }
+        )
+        return payload
+    artifact = dict(plan_payload["artifact"])
+    release_id = str(plan_payload["candidate_release"]["release_id"])
+    current = plan_payload.get("current_release")
+    if isinstance(current, dict) and current.get("artifact_sha256") == artifact.get("sha256"):
+        payload.update(
+            {
+                "status": "healthy",
+                "stage": "unchanged",
+                "connection_status": "ok",
+                "release": current,
+                "stages": [stage_event("unchanged", release_id=current.get("release_id"))],
+                "finished_at": utc_now(),
+            }
+        )
+        return payload
+    locked = acquire_directory_lock(args.alias, paths, operation_id, started_at, args.timeout)
+    payload["lock"] = locked
+    if locked.get("status") != "ok":
+        return stage_failure(payload, [], "lock", locked)
+    try:
+        refreshed = inspect_directory_target(
+            args.alias,
+            args.app,
+            args.live_path,
+            args.state_root,
+            args.nginx_server_name,
+            args.timeout,
+        )
+        inspection = refreshed.get("inspection")
+        if inspection is None:
+            return stage_failure(payload, [], "inspect", refreshed)
+        expected_baseline = str(plan_payload.get("baseline", {}).get("live") or "")
+        actual_baseline = str(inspection.get("live_baseline") or "")
+        if not expected_baseline or actual_baseline != expected_baseline:
+            return stage_failure(
+                payload,
+                [],
+                "precondition",
+                {
+                    "status": "failed",
+                    "connection_status": "ok",
+                    "error": "deployment_baseline_changed：线上目录在 plan 后发生变化",
+                },
+            )
+        previous = directory_current_release(inspection)
+        previous_id = str(previous.get("release_id")) if previous else legacy_release_id(inspection)
+        previous_manifest = next(
+            (
+                dict(item) for item in inspection.get("manifests", [])
+                if str(item.get("release_id") or "") == previous_id
+            ),
+            directory_release_manifest(
+                previous_id,
+                None,
+                started_at,
+                "legacy",
+                paths,
+                str(inspection.get("entry_sha256") or ""),
+            ),
+        )
+        candidate_manifest = next(
+            (
+                dict(item) for item in inspection.get("manifests", [])
+                if str(item.get("release_id") or "") == release_id
+                and str(item.get("artifact_sha256") or "") == str(artifact.get("sha256") or "")
+                and release_id in inspection.get("release_paths", [])
+            ),
+            None,
+        )
+        stages: list[dict[str, Any]] = []
+        reused = candidate_manifest is not None
+        if reused:
+            candidate_path = posixpath.join(paths["releases_root"], release_id)
+            stages.append(stage_event("staged", release_id=release_id, reused=True))
+        else:
+            artifact_remote = posixpath.join(
+                paths["staging_root"], f"upload-{release_id}", "artifact.tar.gz"
+            )
+            upload = run_ssh_put(
+                args.alias,
+                str(artifact["path"]),
+                artifact_remote,
+                args.timeout,
+                args.upload_chunk_size,
+            )
+            payload["upload"] = upload
+            if upload.get("status") != "ok":
+                return stage_failure(payload, stages, "upload", upload)
+            stages.append(stage_event("uploaded", result=upload.get("result")))
+            staged = remote_step(
+                args.alias,
+                directory_stage_command(
+                    paths,
+                    artifact_remote,
+                    str(artifact.get("sha256") or ""),
+                    release_id,
+                    operation_id,
+                ),
+                args.timeout,
+                "stage",
+            )
+            payload["staged_release"] = staged
+            if staged.get("status") != "ok":
+                return stage_failure(payload, stages, "stage", staged)
+            marker = "DEPLOYX_DIRECTORY_STAGE\t"
+            candidate_path = next(
+                (line[len(marker):] for line in str(staged.get("stdout", "")).splitlines() if line.startswith(marker)),
+                "",
+            )
+            if not candidate_path:
+                return stage_failure(
+                    payload,
+                    stages,
+                    "stage",
+                    {"status": "failed", "connection_status": "ok", "error": "暂存目录结果不可解析"},
+                )
+            stages.append(stage_event("staged", release_id=release_id, reused=False))
+            candidate_manifest = directory_release_manifest(
+                release_id,
+                artifact,
+                started_at,
+                "artifact",
+                paths,
+            )
+        switched = remote_step(
+            args.alias,
+            directory_switch_command(paths, candidate_path, previous_id, expected_baseline),
+            args.timeout,
+            "switch",
+        )
+        payload["switch"] = switched
+        if switched.get("status") != "ok":
+            return stage_failure(payload, stages, "switch", switched)
+        stages.append(stage_event("switched", release_id=release_id, previous_release=previous_id))
+        runtime = directory_runtime_health(args, paths)
+        payload["health"] = runtime
+        if runtime.get("status") != "healthy":
+            failure = stage_failure(
+                payload,
+                stages,
+                str(runtime.get("failed_stage") or "health"),
+                runtime,
+            )
+            recovery = remote_step(
+                args.alias,
+                directory_recovery_command(paths, previous_id, operation_id),
+                args.timeout,
+                "rollback",
+            )
+            failure["rollback"] = recovery
+            if recovery.get("status") == "ok":
+                recovery_health = directory_runtime_health(args, paths)
+                failure["rollback"]["health"] = recovery_health
+                if recovery_health.get("status") == "healthy":
+                    failure.update({"status": "rolled_back", "stage": "rolled_back"})
+                    failure["stages"].append(stage_event("rolled_back", release_id=previous_id))
+            last_result = {
+                "schema_version": SCHEMA_VERSION,
+                "operation": "apply",
+                "operation_id": operation_id,
+                "status": failure.get("status"),
+                "failed_stage": failure.get("failed_stage"),
+                "release_id": release_id,
+                "previous_release": previous_id,
+                "started_at": started_at,
+                "finished_at": utc_now(),
+                "rollback": failure.get("rollback"),
+            }
+            persisted = persist_directory_state(
+                args.alias, paths, None, [], last_result, operation_id, args.timeout
+            )
+            failure["persistence"] = persisted
+            return failure
+        stages.extend([stage_event("verified"), stage_event("healthy")])
+        finished_at = utc_now()
+        candidate_manifest = dict(candidate_manifest or {})
+        candidate_manifest.update({"state": "active", "verified_at": finished_at})
+        previous_manifest.update({"state": "available"})
+        deployment = {
+            "schema_version": SCHEMA_VERSION,
+            "app": args.app,
+            "strategy": "directory-swap",
+            "service_type": "nginx-static",
+            "ssh_alias": args.alias,
+            "live_path": paths["live_path"],
+            "state_root": paths["state_root"],
+            "current_release": release_id,
+            "artifact_sha256": artifact.get("sha256"),
+            "nginx_server_name": args.nginx_server_name,
+            "health_check_specs": list(args.health_check or []),
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+        last_result = {
+            "schema_version": SCHEMA_VERSION,
+            "operation": "apply",
+            "operation_id": operation_id,
+            "status": "healthy",
+            "release_id": release_id,
+            "previous_release": previous_id,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "health": runtime,
+        }
+        persisted = persist_directory_state(
+            args.alias,
+            paths,
+            deployment,
+            [previous_manifest, candidate_manifest],
+            last_result,
+            operation_id,
+            args.timeout,
+        )
+        payload["persistence"] = persisted
+        manifests = [
+            *[
+                dict(item) for item in inspection.get("manifests", [])
+                if str(item.get("release_id") or "") not in {previous_id, release_id}
+            ],
+            previous_manifest,
+            candidate_manifest,
+        ]
+        retention = prune_directory_releases(
+            args.alias,
+            paths,
+            manifests,
+            release_id,
+            previous_id,
+            args.keep_releases,
+            args.timeout,
+        )
+        payload.update(
+            {
+                "status": "healthy",
+                "stage": "healthy",
+                "connection_status": "ok",
+                "release": candidate_manifest,
+                "previous_release": previous_manifest,
+                "stages": stages,
+                "health": runtime,
+                "retention": retention,
+                "finished_at": finished_at,
+            }
+        )
+        return payload
+    finally:
+        payload["unlock"] = release_directory_lock(
+            args.alias, paths, operation_id, args.timeout
+        )
+
+
+def directory_status(args: argparse.Namespace) -> dict[str, Any]:
+    if not args.live_path:
+        raise ValueError("directory-swap 必须提供 --live-path")
+    result = inspect_directory_target(
+        args.alias,
+        args.app,
+        args.live_path,
+        args.state_root,
+        args.nginx_server_name,
+        args.timeout,
+    )
+    paths = result["paths"]
+    payload = directory_base_payload("deployment_status", args.alias, args.app, paths)
+    inspection = result.get("inspection")
+    if inspection is None:
+        payload.update(
+            {
+                "status": result.get("status"),
+                "connection_status": result.get("connection_status"),
+                "error": result.get("error"),
+                "management_status": "unknown",
+                "current_release": None,
+                "last_result": None,
+                "warnings": [],
+            }
+        )
+        return payload
+    current = directory_current_release(inspection)
+    management_status = "managed" if current else "legacy_unmanaged"
+    warnings = list(inspection.get("warnings", []))
+    if inspection.get("active_lock"):
+        warnings.append("存在进行中的目录部署锁")
+    if args.nginx_server_name and not inspection.get("nginx_root_found"):
+        warnings.append("Nginx root/alias 与 live_path 不一致")
+    status_value = "partial" if warnings or management_status == "legacy_unmanaged" else "ok"
+    payload.update(
+        {
+            "status": status_value,
+            "connection_status": "ok",
+            "management_status": management_status,
+            "current_release": current or {
+                "release_id": legacy_release_id(inspection),
+                "path": paths["live_path"],
+                "state": "legacy_unmanaged",
+                "entry_sha256": inspection.get("entry_sha256"),
+            },
+            "baseline": inspection.get("live_baseline"),
+            "nginx": {
+                "server_name": args.nginx_server_name,
+                "test": inspection.get("nginx_test"),
+                "root_matched": inspection.get("nginx_root_found"),
+            },
+            "active_lock": inspection.get("active_lock") or None,
+            "last_result": inspection.get("last_result") or None,
+            "warnings": warnings,
+        }
+    )
+    return payload
+
+
+def directory_history(args: argparse.Namespace) -> dict[str, Any]:
+    result = inspect_directory_target(
+        args.alias,
+        args.app,
+        args.live_path,
+        args.state_root,
+        args.nginx_server_name,
+        args.timeout,
+    )
+    paths = result["paths"]
+    payload = directory_base_payload("deployment_history", args.alias, args.app, paths)
+    inspection = result.get("inspection")
+    if inspection is None:
+        payload.update(
+            {
+                "status": result.get("status"),
+                "connection_status": result.get("connection_status"),
+                "error": result.get("error"),
+                "current_release": None,
+                "releases": [],
+                "warnings": [],
+            }
+        )
+        return payload
+    current = directory_current_release(inspection)
+    releases = sorted(
+        [dict(item) for item in inspection.get("manifests", [])],
+        key=lambda item: (str(item.get("created_at") or ""), str(item.get("release_id") or "")),
+        reverse=True,
+    )
+    payload.update(
+        {
+            "status": "partial" if inspection.get("warnings") else "ok",
+            "connection_status": "ok",
+            "management_status": "managed" if current else "legacy_unmanaged",
+            "current_release": current,
+            "releases": releases[: args.limit],
+            "last_result": inspection.get("last_result") or None,
+            "warnings": list(inspection.get("warnings", [])),
+        }
+    )
+    return payload
+
+
+def directory_rollback(args: argparse.Namespace) -> dict[str, Any]:
+    if not args.live_path:
+        raise ValueError("directory-swap 必须提供 --live-path")
+    started_at = utc_now()
+    inspected = inspect_directory_target(
+        args.alias,
+        args.app,
+        args.live_path,
+        args.state_root,
+        args.nginx_server_name,
+        args.timeout,
+    )
+    paths = inspected["paths"]
+    payload = directory_base_payload("deployment_rollback", args.alias, args.app, paths)
+    operation_id = "rollback-" + uuid.uuid4().hex[:12]
+    payload.update({"operation": "rollback", "deployment_id": operation_id, "started_at": started_at})
+    inspection = inspected.get("inspection")
+    if inspection is None:
+        return stage_failure(payload, [], "inspect", inspected)
+    current = directory_current_release(inspection)
+    if not current:
+        return stage_failure(
+            payload,
+            [],
+            "precondition",
+            {"status": "failed", "connection_status": "ok", "error": "历史目录尚未被 deployx 管理"},
+        )
+    current_id = str(current["release_id"])
+    available = [
+        dict(item) for item in inspection.get("manifests", [])
+        if str(item.get("release_id") or "") != current_id
+        and str(item.get("release_id") or "") in inspection.get("release_paths", [])
+    ]
+    available.sort(
+        key=lambda item: (str(item.get("created_at") or ""), str(item.get("release_id") or "")),
+        reverse=True,
+    )
+    if args.release:
+        if not RELEASE_ID_RE.fullmatch(args.release):
+            raise ValueError("--release 只能是单级 release ID")
+        target = next((item for item in available if item.get("release_id") == args.release), None)
+    else:
+        target = available[0] if available else None
+    if not target:
+        return stage_failure(
+            payload,
+            [],
+            "precondition",
+            {"status": "failed", "connection_status": "ok", "error": "没有可用的历史 release"},
+        )
+    spec = inspection.get("deployment_spec") if isinstance(inspection.get("deployment_spec"), dict) else {}
+    if not args.nginx_server_name:
+        args.nginx_server_name = str(spec.get("nginx_server_name") or "")
+    if not args.health_check:
+        args.health_check = list(spec.get("health_check_specs") or [])
+    if not application_health_specs(args.health_check):
+        return stage_failure(
+            payload,
+            [],
+            "precondition",
+            {"status": "failed", "connection_status": "ok", "error": "回滚缺少 HTTP 健康检查"},
+        )
+    locked = acquire_directory_lock(args.alias, paths, operation_id, started_at, args.timeout)
+    payload["lock"] = locked
+    if locked.get("status") != "ok":
+        return stage_failure(payload, [], "lock", locked)
+    try:
+        baseline = str(inspection.get("live_baseline") or "")
+        switched = remote_step(
+            args.alias,
+            directory_switch_command(
+                paths,
+                posixpath.join(paths["releases_root"], str(target["release_id"])),
+                current_id,
+                baseline,
+            ),
+            args.timeout,
+            "switch",
+        )
+        if switched.get("status") != "ok":
+            return stage_failure(payload, [], "switch", switched)
+        runtime = directory_runtime_health(args, paths)
+        if runtime.get("status") != "healthy":
+            failure = stage_failure(
+                payload,
+                [stage_event("switched", release_id=target["release_id"])],
+                str(runtime.get("failed_stage") or "health"),
+                runtime,
+            )
+            recovery = remote_step(
+                args.alias,
+                directory_recovery_command(paths, current_id, operation_id),
+                args.timeout,
+                "rollback-recovery",
+            )
+            failure["rollback"] = recovery
+            return failure
+        finished_at = utc_now()
+        target = {**target, "state": "active", "verified_at": finished_at}
+        current_manifest = next(
+            (
+                dict(item) for item in inspection.get("manifests", [])
+                if str(item.get("release_id") or "") == current_id
+            ),
+            dict(current),
+        )
+        current_manifest["state"] = "available"
+        deployment = {
+            **spec,
+            "schema_version": SCHEMA_VERSION,
+            "current_release": target["release_id"],
+            "artifact_sha256": target.get("artifact_sha256"),
+            "finished_at": finished_at,
+        }
+        last_result = {
+            "schema_version": SCHEMA_VERSION,
+            "operation": "rollback",
+            "operation_id": operation_id,
+            "status": "healthy",
+            "release_id": target["release_id"],
+            "previous_release": current_id,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "health": runtime,
+        }
+        persisted = persist_directory_state(
+            args.alias,
+            paths,
+            deployment,
+            [target, current_manifest],
+            last_result,
+            operation_id,
+            args.timeout,
+        )
+        payload.update(
+            {
+                "status": "healthy",
+                "stage": "healthy",
+                "connection_status": "ok",
+                "release": target,
+                "previous_release": current_manifest,
+                "stages": [
+                    stage_event("staged", release_id=target["release_id"], reused=True),
+                    stage_event("switched", release_id=target["release_id"]),
+                    stage_event("verified"),
+                    stage_event("healthy"),
+                ],
+                "health": runtime,
+                "persistence": persisted,
+                "finished_at": finished_at,
+            }
+        )
+        return payload
+    finally:
+        payload["unlock"] = release_directory_lock(
+            args.alias, paths, operation_id, args.timeout
+        )
+
+
 def plan(args: argparse.Namespace) -> dict[str, Any]:
+    if args.strategy == "directory-swap":
+        return directory_plan(args)
+    if not args.release_root:
+        raise ValueError("versioned-link 必须提供 --release-root")
+    if args.service_type != "systemd":
+        raise ValueError("versioned-link 首版只支持 --service-type systemd")
+    if not args.service:
+        raise ValueError("systemd 部署必须提供 --service")
     artifact = artifact_info(args.artifact, args.artifact_sha256)
     paths = layout(args.app, args.release_root)
     candidate_release = release_id_for(artifact) if artifact.get("sha256") else None
@@ -2618,12 +4043,8 @@ if ! tar -tzf "$artifact" >/dev/null 2>&1; then
     exit 44
 fi
 if [ -e "$release_path" ]; then
-    if [ -d "$release_path" ] && [ -r "$release_path/manifest.json"] && grep -Fq -- {shlex.quote(f'"artifact_sha256":"{artifact_sha256}"')} "$release_path/manifest.json"; then
+    if [ -d "$release_path" ] && [ -r "$release_path/manifest.json" ] && grep -Fq -- {shlex.quote(f'"artifact_sha256":"{artifact_sha256}"')} "$release_path/manifest.json"; then
         rm -rf -- "$staging_dir"
-        deployment_json={shlex.quote(json.dumps(deployment_spec, ensure_ascii=False, separators=(',', ':')))}
-        spec_tmp="$app_root/.deployment.json.{deployment_id}.tmp"
-        printf '%s\n' "$deployment_json" > "$spec_tmp"
-        mv -f "$spec_tmp" "$app_root/deployment.json"
         trap - EXIT HUP INT TERM
         printf 'DEPLOYX_STAGE_JSON\t%s\n' {shlex.quote(json.dumps(reused, ensure_ascii=False, separators=(',', ':')))}
         exit 0
@@ -2638,10 +4059,6 @@ manifest_json={shlex.quote(json.dumps(manifest, ensure_ascii=False, separators=(
 printf '%s\n' "$manifest_json" > "$candidate_tmp/manifest.json"
 mv "$candidate_tmp" "$release_path"
 rm -rf -- "$staging_dir"
-deployment_json={shlex.quote(json.dumps(deployment_spec, ensure_ascii=False, separators=(',', ':')))}
-spec_tmp="$app_root/.deployment.json.{deployment_id}.tmp"
-printf '%s\n' "$deployment_json" > "$spec_tmp"
-mv -f "$spec_tmp" "$app_root/deployment.json"
 trap - EXIT HUP INT TERM
 printf 'DEPLOYX_STAGE_JSON\t%s\n' {shlex.quote(json.dumps(staged, ensure_ascii=False, separators=(',', ':')))}
 """
@@ -2666,7 +4083,7 @@ if [ -e "$current_link" ] && [ ! -L "$current_link" ]; then
 fi
 rm -f "$temp_link"
 ln -s "$target" "$temp_link"
-mv -f "$temp_link" "$current_link"
+mv -Tf "$temp_link" "$current_link"
 actual=$(readlink "$current_link" 2>/dev/null || true)
 if [ "$actual" != "$target" ]; then
     echo "current 原子切换校验失败：$actual" >&2
@@ -3003,6 +4420,8 @@ def finalize_payload(
     *,
     include_deployment: bool = True,
 ) -> dict[str, Any]:
+    if include_deployment and payload.get("status") != "healthy":
+        include_deployment = False
     persisted = persist_state(
         alias,
         paths,
@@ -3025,6 +4444,8 @@ def finalize_payload(
 
 
 def apply(args: argparse.Namespace) -> dict[str, Any]:
+    if args.strategy == "directory-swap":
+        return directory_apply(args)
     started_at = utc_now()
     plan_payload = plan(args)
     paths = layout(args.app, args.release_root)
@@ -3237,6 +4658,10 @@ def apply(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def rollback(args: argparse.Namespace) -> dict[str, Any]:
+    if args.strategy == "directory-swap":
+        return directory_rollback(args)
+    if not args.release_root:
+        raise ValueError("versioned-link 必须提供 --release-root")
     started_at = utc_now()
     paths = layout(args.app, args.release_root)
     payload = base_payload("deployment_rollback", args.alias, args.app, args.release_root)
@@ -3397,6 +4822,10 @@ def rollback(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def status(args: argparse.Namespace) -> dict[str, Any]:
+    if args.strategy == "directory-swap":
+        return directory_status(args)
+    if not args.release_root:
+        raise ValueError("versioned-link 必须提供 --release-root")
     inspection_result = inspect_target(args.alias, args.app, args.release_root, args.timeout)
     payload = base_payload("deployment_status", args.alias, args.app, args.release_root)
     if inspection_result.get("inspection") is None:
@@ -3442,6 +4871,10 @@ def status(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def history(args: argparse.Namespace) -> dict[str, Any]:
+    if args.strategy == "directory-swap":
+        return directory_history(args)
+    if not args.release_root:
+        raise ValueError("versioned-link 必须提供 --release-root")
     inspection_result = inspect_target(args.alias, args.app, args.release_root, args.timeout)
     payload = base_payload("deployment_history", args.alias, args.app, args.release_root)
     if inspection_result.get("inspection") is None:
@@ -3583,8 +5016,16 @@ def add_registry_output_args(parser: argparse.ArgumentParser) -> None:
 def add_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("alias")
     parser.add_argument("--app", required=True)
-    parser.add_argument("--release-root", required=True)
+    parser.add_argument("--release-root")
     add_common_args(parser)
+
+
+def add_deployment_strategy_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--strategy", choices=sorted(STRATEGIES), default="versioned-link")
+    parser.add_argument("--service-type", choices=sorted(SERVICE_TYPES), default="systemd")
+    parser.add_argument("--live-path")
+    parser.add_argument("--state-root")
+    parser.add_argument("--nginx-server-name")
 
 
 def add_service_lifecycle_args(parser: argparse.ArgumentParser) -> None:
@@ -3634,25 +5075,27 @@ def add_service_observation_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="编排版本化部署的计划、执行、状态和回滚。")
+    parser = argparse.ArgumentParser(description="编排版本化或历史目录兼容部署的计划、执行、状态和回滚。")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     plan_parser = subparsers.add_parser("plan", help="生成只读部署计划")
     add_target_args(plan_parser)
     plan_parser.add_argument("--artifact", required=True)
     plan_parser.add_argument("--artifact-sha256")
-    plan_parser.add_argument("--service", required=True)
+    plan_parser.add_argument("--service")
     plan_parser.add_argument("--health-check", action="append")
     plan_parser.add_argument("--keep-releases", type=int, default=5)
+    add_deployment_strategy_args(plan_parser)
     plan_parser.set_defaults(func=plan)
 
-    apply_parser = subparsers.add_parser("apply", help="上传并执行版本化部署")
+    apply_parser = subparsers.add_parser("apply", help="上传制品并执行部署")
     add_target_args(apply_parser)
     apply_parser.add_argument("--artifact", required=True)
     apply_parser.add_argument("--artifact-sha256")
-    apply_parser.add_argument("--service", required=True)
+    apply_parser.add_argument("--service")
     apply_parser.add_argument("--health-check", action="append")
     apply_parser.add_argument("--keep-releases", type=int, default=5)
+    add_deployment_strategy_args(apply_parser)
     apply_parser.add_argument(
         "--upload-chunk-size",
         type=int,
@@ -3664,11 +5107,13 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status", help="查看当前版本和最近部署结果")
     add_target_args(status_parser)
     status_parser.add_argument("--service")
+    add_deployment_strategy_args(status_parser)
     status_parser.set_defaults(func=status)
 
-    history_parser = subparsers.add_parser("history", help="查看版本目录和部署 manifest")
+    history_parser = subparsers.add_parser("history", help="查看受管版本和部署 manifest")
     add_target_args(history_parser)
     history_parser.add_argument("--limit", type=int, default=20)
+    add_deployment_strategy_args(history_parser)
     history_parser.set_defaults(func=history)
 
     rollback_parser = subparsers.add_parser("rollback", help="切换到指定或上一个可用 release")
@@ -3677,6 +5122,7 @@ def build_parser() -> argparse.ArgumentParser:
     rollback_parser.add_argument("--service")
     rollback_parser.add_argument("--health-check", action="append")
     rollback_parser.add_argument("--keep-releases", type=int, default=5)
+    add_deployment_strategy_args(rollback_parser)
     rollback_parser.set_defaults(func=rollback)
 
     project_parser = subparsers.add_parser("project", help="登记和查看项目")

@@ -1,6 +1,6 @@
 # lystar-deploy-ops
 
-面向 OpenCode、Codex、Claude Code、Pi 等 Agent Harness 的版本化部署与回滚 Skill，附带 `deployx` 命令。
+面向 OpenCode、Codex、Claude Code、Pi 等 Agent Harness 的版本化与历史目录兼容部署 Skill，附带 `deployx` 命令。
 
 ## 安装
 
@@ -29,6 +29,34 @@ deployx rollback prod --app web --release-root /srv/apps \
 ```
 
 `plan`、`status`、`history` 只读目标主机的发布目录、版本 manifest、可用空间和服务状态。`apply` 默认通过 `sshx put --resume` 以 4 MiB 分片上传 `.tar.gz`，失败重试时从远端 staging 文件继续；暂存成功后清理该文件，上传或暂存失败则保留续传文件并在结果中返回 `resume`/`cleanup` 信息。之后会校验并落盘 release，原子切换 `current`，重启服务并执行 `hostx health`；`rollback` 切换到指定或上一可用 release。失败阶段、自动回退结果和最近一次部署结果都通过 JSON 返回并写入远端 state。不会执行数据库迁移。
+
+默认策略是 `versioned-link`，兼容现有命令和 `<release-root>/<app>/current → releases/<release-id>` 结构。历史 Nginx 静态站点使用 `directory-swap`，线上路径保持不变，Nginx 无需改成指向软链接：
+
+```bash
+deployx plan prod --app mochu-admin \
+  --strategy directory-swap --service-type nginx-static \
+  --live-path /data/mochu_admin \
+  --state-root /data/.deployx/mochu_admin \
+  --nginx-server-name mochu.admin.example \
+  --artifact ./mochu-admin.tar.gz \
+  --health-check 'https://mochu.admin.example/|status=200|contains=<title>'
+
+deployx apply prod --app mochu-admin \
+  --strategy directory-swap --service-type nginx-static \
+  --live-path /data/mochu_admin \
+  --state-root /data/.deployx/mochu_admin \
+  --nginx-server-name mochu.admin.example \
+  --artifact ./mochu-admin.tar.gz \
+  --health-check 'https://mochu.admin.example/|status=200|contains=<title>'
+
+deployx rollback prod --app mochu-admin \
+  --strategy directory-swap --service-type nginx-static \
+  --live-path /data/mochu_admin \
+  --state-root /data/.deployx/mochu_admin \
+  --nginx-server-name mochu.admin.example
+```
+
+`directory-swap` 在执行前检查制品安全、磁盘空间、同文件系统、部署锁和 Nginx 绑定。发布时将旧目录保留为回退版本，再把新目录移动到相同的 `--live-path`；HTTP 健康检查失败会恢复原目录。状态、manifest 和回退版本保存在独立 `--state-root`。没有 deployx manifest 的历史或人工目录不会被自动清理。
 
 ## 注册与新服务 draft
 

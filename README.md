@@ -7,7 +7,7 @@
 | `lystar-ssh-ops` | `sshx` | SSH/SFTP、远程命令、长任务、任务取消/跟随、本地端口转发、服务器资料维护 |
 | `lystar-db-ops` | `dbx` | MySQL、MariaDB、PostgreSQL 数据源发现、版本探测、事务控制、查询、执行、导入导出 |
 | `lystar-host-ops` | `hostx` | 主机事实、服务、进程、日志、监听端口、磁盘和只读健康检查 |
-| `lystar-deploy-ops` | `deployx` | 版本化部署、健康检查、状态、历史和可回滚发布 |
+| `lystar-deploy-ops` | `deployx` | 版本化或历史目录兼容部署、健康检查、状态、历史和回滚 |
 | `lystar-backup-ops` | `backupx` | 本地数据库/文件备份、校验、恢复、恢复验证和保留清理 |
 | `lystar-incident-ops` | `incidentx` | 只读事件证据、可校验诊断包和离线时间线 |
 
@@ -214,7 +214,7 @@ hostx facts prod --json
 
 ## 部署使用
 
-`deployx` 通过现有 `sshx` 和 `hostx` 编排版本化发布。`plan`、`status`、`history` 保持只读；明确执行 `apply` 或 `rollback` 才会上传制品、切换版本、重启服务和执行健康检查：
+`deployx` 通过现有 `sshx` 和 `hostx` 编排版本化或历史目录兼容发布。`plan`、`status`、`history` 保持只读；明确执行 `apply` 或 `rollback` 才会上传制品、切换版本、重启服务或执行健康检查：
 
 ```bash
 deployx plan prod --app web --artifact ./web.tar.gz \
@@ -228,7 +228,21 @@ deployx rollback prod --app web --release-root /srv/apps
 
 `apply` 的制品上传默认使用 `sshx put --resume` 和 4 MiB 分片。上传或暂存中断后，下一次对同一制品执行 `apply` 会复用确定性的 staging 文件继续传输；暂存成功后自动清理，失败状态会把续传位置写入 `resume`、`cleanup` 和远端 `deployments/last.json`。
 
-`--release-root` 必须是显式绝对远端目录，应用版本目录为 `<release-root>/<app>/releases/<release-id>`，首版制品格式固定为 `.tar.gz`。`apply` 和 `rollback` 的 JSON 结果记录 `staged`、`switched`、`restarted`、`healthy`、`failed` 或 `rolled_back` 阶段；健康失败只在有已验证上一版本时自动回退。
+默认 `versioned-link` 策略保持现有参数和 `<release-root>/<app>/current → releases/<release-id>` 目录不变，适合 systemd 服务和新项目。首版制品格式固定为 `.tar.gz`。`apply` 和 `rollback` 的 JSON 结果记录 `staged`、`switched`、`restarted`、`healthy`、`failed` 或 `rolled_back` 阶段；健康失败只在有可验证上一版本时自动回退。
+
+已有 Nginx 静态站点使用 `directory-swap`，保持线上目录和 Nginx 配置不变，把 manifest、版本和部署状态放到独立目录：
+
+```bash
+deployx apply prod --app mochu-admin \
+  --strategy directory-swap --service-type nginx-static \
+  --live-path /data/mochu_admin \
+  --state-root /data/.deployx/mochu_admin \
+  --nginx-server-name mochu.admin.example \
+  --artifact ./mochu-admin.tar.gz \
+  --health-check 'https://mochu.admin.example/|status=200|contains=<title>'
+```
+
+该策略会先核验 Nginx 绑定和 HTTP 健康检查，切换失败时恢复原目录；没有 deployx manifest 的历史或人工目录不会被自动清理。接入 deployx 不要求现有业务迁移成软链接目录。
 
 `deployx` 也统一托管项目、服务、环境和 recipe 注册信息。注册表位于 `${XDG_CONFIG_HOME:-~/.config}/agent-ops/ops.toml`，不改写旧 SSH/数据库配置：
 
