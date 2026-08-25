@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import registry_store
+import paths
 
 
 SCHEMA_VERSION = 1
@@ -1505,8 +1506,7 @@ def recipe_home() -> Path:
     configured = os.environ.get("DEPLOYX_RECIPE_HOME")
     if configured:
         return Path(configured).expanduser()
-    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return data_home / "agent-ops" / "recipes"
+    return paths.recipes_home()
 
 
 def available_recipe(store: registry_store.RegistryStore, recipe_id: str) -> dict[str, Any]:

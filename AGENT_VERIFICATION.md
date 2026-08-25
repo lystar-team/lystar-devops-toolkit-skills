@@ -13,5 +13,6 @@
 - 安装测试：`sh tests/test_install.sh`。
 - 打包测试：`sh tests/test_packages.sh`。
 - 更新测试：`sh tests/test_update.sh`。
+- 迁移验证：在临时 HOME 中准备旧 `agent-ops` 配置、状态和服务器资料，运行 `lystar-migrate`，确认只复制缺失目标、旧目录保留，`--server-link` 只创建显式服务器资料软链接。
 - 构建：`./scripts/build-packages.sh`，产物位于 `dist/`。
 - 已知限制：测试使用本地 Mock SSH 服务、fake sshx 和伪造 Release，不连接真实服务器或数据库；安装/打包测试会清空外部 Harness 路径变量以避免污染。

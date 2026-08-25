@@ -23,6 +23,7 @@ install_regular_skill lystar-deploy-ops
 install_regular_skill lystar-backup-ops
 install_regular_skill lystar-incident-ops
 install_server_data
+remove_legacy_server_links
 remove_legacy_skill sql-multi-db-ops
 remove_legacy_skill ssh-ops
 remove_legacy_skill lystar-server-ops
@@ -39,9 +40,10 @@ verify_command deployx
 verify_command backupx
 verify_command incidentx
 verify_command lystar-skill-update
+verify_command lystar-migrate
 
 echo "完整安装完成："
-echo "  命令：$bin_home/dbx、$bin_home/sshx、$bin_home/hostx、$bin_home/deployx、$bin_home/backupx、$bin_home/incidentx、$bin_home/lystar-skill-update"
+echo "  命令：$bin_home/dbx、$bin_home/sshx、$bin_home/hostx、$bin_home/deployx、$bin_home/backupx、$bin_home/incidentx、$bin_home/lystar-skill-update、$bin_home/lystar-migrate"
 print_skill_locations lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops
 echo "  服务器资料：$server_ops_home"
 print_path_notice

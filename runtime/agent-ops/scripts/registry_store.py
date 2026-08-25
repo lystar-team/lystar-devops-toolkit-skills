@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from config_store import lock_files, load_toml, write_toml
+import paths
 
 
 SCHEMA_VERSION = 1
@@ -95,17 +96,15 @@ def utc_now() -> str:
 
 
 def default_registry_file(config_home: str | Path | None = None) -> Path:
-    root = Path(config_home).expanduser() if config_home is not None else Path(
-        os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
-    )
-    return root / "agent-ops" / "ops.toml"
+    root = Path(config_home).expanduser() if config_home is not None else paths.config_home()
+    return root / "ops.toml"
 
 
 def default_revision_dir(state_home: str | Path | None = None) -> Path:
-    root = Path(state_home).expanduser() if state_home is not None else Path(
-        os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")
-    )
-    return root / "agent-ops" / "ops" / "revisions"
+    root = Path(state_home).expanduser() if state_home is not None else paths.state_home()
+    if state_home is None and paths.legacy_mode():
+        return root / "ops" / "revisions"
+    return root / "registry" / "revisions"
 
 
 def empty_registry() -> dict[str, Any]:

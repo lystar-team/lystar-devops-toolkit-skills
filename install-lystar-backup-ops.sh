@@ -14,8 +14,9 @@ install_regular_skill lystar-backup-ops
 record_skill_installation lystar-backup-ops
 verify_command backupx
 verify_command lystar-skill-update
+verify_command lystar-migrate
 
 echo "lystar-backup-ops 安装完成："
-echo "  命令：$bin_home/backupx、$bin_home/lystar-skill-update"
+echo "  命令：$bin_home/backupx、$bin_home/lystar-skill-update、$bin_home/lystar-migrate"
 print_skill_locations lystar-backup-ops
 print_path_notice

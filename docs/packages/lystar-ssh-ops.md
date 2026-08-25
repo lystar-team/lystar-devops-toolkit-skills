@@ -1,6 +1,6 @@
 # lystar-ssh-ops
 
-面向 OpenCode、Codex、Claude Code、Pi 等 Agent Harness 的 SSH/SFTP 与服务器资料管理 Skill，附带 `sshx` 命令。服务器资料直接作为 Skill 的 `servers/` 子目录使用，不再需要独立的 server Skill。
+面向 OpenCode、Codex、Claude Code、Pi 等 Agent Harness 的 SSH/SFTP 与服务器资料管理 Skill，附带 `sshx` 命令。服务器资料统一放在 `$HOME/.lystar/servers`，不再放入 Skill 安装目录。
 
 ## 安装
 
@@ -14,10 +14,10 @@
 ./install.sh --harness claude
 ./install.sh --harness opencode,codex,pi
 ./install.sh --skills-home /path/to/compatible/skills
-./install.sh --server-home /private/server-list
+./install.sh --server-home /private/server-list  # 兼容入口，标准路径仍是 ~/.lystar/servers
 ```
 
-需要 Unix 兼容系统、Python 3.11+ 和联网安装 Paramiko。SSH 建连、同步远程操作和普通远程命令默认超时为 120 秒。
+需要 Unix 兼容系统、Python 3.11+ 和联网安装 Paramiko。SSH 建连、同步远程操作和普通远程命令默认超时为 120 秒；daemon 连续空闲 15 分钟后自动退出。可以用 `sshx open ... --idle-timeout <秒>` 或 `SSHX_IDLE_TIMEOUT` 覆盖，`0` 表示不自动退出。正在执行的请求和活跃端口转发会阻止空闲回收。
 
 单文件上传使用 `sshx put <别名> <本地路径> <远端路径>`；需要跨连接续传时追加 `--resume`，并可用 `--chunk-size <字节数>` 调整单次 SFTP 写入大小，默认 4 MiB。目录上传保持原有递归行为。
 
@@ -57,3 +57,5 @@ sshx forward close prod <forward_id>
 任务列表和单任务查询沿用远端 `~/.agent-ops/jobs/<job_id>`；`--follow` 按日志偏移增量输出 stdout/stderr 和状态变化。端口转发由已有 SSH daemon 管理，关闭 profile 时一并回收。
 
 `sshx forget <alias> --json` 会先检查全局注册表的 deployment、service 和 backup asset 影响。同一 profile 仍有其它 alias 时，引用会同步到存活 alias；删除最后一个 alias/profile 时必须显式使用 `--confirm` 才会将 deployment/backup asset 标记为 `orphaned`。不会静默删除远端对象、备份文件或 SSH 密码。
+
+服务器资料默认位于 `${LYSTAR_HOME:-$HOME/.lystar}/servers`。普通用户使用安装器创建的真实目录；已有 Git 资料库可执行 `lystar-migrate --server-link /绝对路径/服务器资料库`，迁移工具不会删除旧目录，也不会在各 Harness 的 Skill 目录创建软链接。

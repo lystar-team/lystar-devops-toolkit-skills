@@ -14,8 +14,9 @@ install_regular_skill lystar-host-ops
 record_skill_installation lystar-host-ops
 verify_command hostx
 verify_command lystar-skill-update
+verify_command lystar-migrate
 
 echo "lystar-host-ops 安装完成："
-echo "  命令：$bin_home/hostx、$bin_home/lystar-skill-update"
+echo "  命令：$bin_home/hostx、$bin_home/lystar-skill-update、$bin_home/lystar-migrate"
 print_skill_locations lystar-host-ops
 print_path_notice

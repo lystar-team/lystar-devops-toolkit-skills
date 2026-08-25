@@ -30,7 +30,7 @@ backupx prune --repository ./backups --keep-last 5 --dry-run
 
 数据库 create 调用 `dbx export`，并把数据库类型、版本、来源、大小和 SHA-256 写入 manifest。文件 create 通过 `sshx run/wait` 在远端生成 tar.gz，再用 `sshx get` 下载。恢复前自动校验本地备份；数据库恢复明确提交事务，文件恢复明确写入用户指定的绝对目录。`verify --read-only` 只返回校验结果，不更新 manifest 状态，供只读诊断采集使用。
 
-仓库和备份资产统一登记在 `${XDG_CONFIG_HOME:-~/.config}/agent-ops/ops.toml`。省略 `--repository` 时使用唯一登记的默认仓库；旧的显式 `--repository` 参数继续有效：
+仓库和备份资产统一登记在 `${LYSTAR_HOME:-$HOME/.lystar}/config/ops.toml`。省略 `--repository` 时使用唯一登记的默认仓库；旧的显式 `--repository` 参数继续有效：
 
 ```bash
 backupx repository register local-prod --path /var/lib/agent-ops/backups --default

@@ -12,14 +12,16 @@ install_command sshx
 install_update_tool
 install_regular_skill lystar-ssh-ops
 install_server_data
+remove_legacy_server_links
 remove_legacy_skill ssh-ops
 remove_legacy_skill lystar-server-ops
 record_skill_installation lystar-ssh-ops server-home
 verify_command sshx
 verify_command lystar-skill-update
+verify_command lystar-migrate
 
 echo "lystar-ssh-ops 安装完成："
-echo "  命令：$bin_home/sshx、$bin_home/lystar-skill-update"
+echo "  命令：$bin_home/sshx、$bin_home/lystar-skill-update、$bin_home/lystar-migrate"
 print_skill_locations lystar-ssh-ops
 echo "  服务器资料：$server_ops_home"
 print_path_notice

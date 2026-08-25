@@ -120,7 +120,7 @@ deployx rollback prod --app mochu-admin \
 
 ## 项目、服务、环境和 recipe 注册
 
-注册表由 Skill 统一保存到 `${XDG_CONFIG_HOME:-~/.config}/agent-ops/ops.toml`，不改写旧的 `sshx`/`dbx` 配置，也不保存密码。注册命令只写本地注册表：
+注册表由 Skill 统一保存到 `${LYSTAR_HOME:-$HOME/.lystar}/config/ops.toml`，不改写旧的 `sshx`/`dbx` 配置，也不保存密码。注册命令只写本地注册表：
 
 ```bash
 deployx project register mall-admin --name "商城后台" --local-path ./mall-admin
@@ -131,7 +131,7 @@ deployx service list --project-id mall-admin --json
 deployx environment list --json
 ```
 
-内置 `tar.gz-systemd` recipe 直接可用；托管脚本 recipe 会复制到 `${XDG_DATA_HOME:-~/.local/share}/agent-ops/recipes/` 并保存每个阶段的 SHA-256：
+内置 `tar.gz-systemd` recipe 直接可用；托管脚本 recipe 会复制到 `${LYSTAR_HOME:-$HOME/.lystar}/data/recipes/` 并保存每个阶段的 SHA-256：
 
 ```bash
 deployx recipe register mall-script --name "商城脚本" \

@@ -8,12 +8,17 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 copy_common() {
     package=$1
-    mkdir -p "$package/scripts" "$package/bin"
+    mkdir -p "$package/scripts" "$package/bin" "$package/runtime/agent-ops/scripts"
     install -m 0644 "$root/VERSION" "$package/VERSION"
     install -m 0644 "$root/LICENSE" "$package/LICENSE"
     install -m 0644 "$root/scripts/install-lib.sh" "$package/scripts/install-lib.sh"
     install -m 0644 "$root/scripts/skill-update.py" "$package/scripts/skill-update.py"
     install -m 0755 "$root/bin/lystar-skill-update" "$package/bin/lystar-skill-update"
+    install -m 0755 "$root/bin/lystar-migrate" "$package/bin/lystar-migrate"
+    install -m 0644 "$root/bin/_lystar-paths.sh" "$package/bin/_lystar-paths.sh"
+    install -m 0644 "$root/runtime/agent-ops/scripts/paths.py" \
+        "$root/runtime/agent-ops/scripts/migrate.py" \
+        "$package/runtime/agent-ops/scripts/"
 }
 
 make_db_package() {
@@ -49,6 +54,7 @@ make_ssh_package() {
     install -m 0644 "$root/skills/lystar-ssh-ops/SKILL.md" "$package/skills/lystar-ssh-ops/SKILL.md"
     install -m 0644 "$root/templates/server-list/README.md" "$package/templates/server-list/README.md"
     install -m 0644 "$root/templates/server-list/_templates/server.md" "$package/templates/server-list/_templates/server.md"
+    install -m 0644 "$root/templates/server-list/_templates/service.md" "$package/templates/server-list/_templates/service.md"
     install -m 0644 "$root/templates/server-list/_templates/topic.md" "$package/templates/server-list/_templates/topic.md"
     install -m 0644 "$root/docs/packages/lystar-ssh-ops.md" "$package/README.md"
 }
@@ -131,7 +137,7 @@ for name in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lysta
 done
 
 (cd "$root" && zip -qr "$output/lystar-devops-toolkit-skills.zip" \
-    VERSION LICENSE README.md CONTRIBUTING.md \
+    VERSION LICENSE README.md AGENTS.md CONTRIBUTING.md \
     bin docs requirements runtime scripts skills templates tests \
     install.sh install-lystar-db-ops.sh install-lystar-ssh-ops.sh install-lystar-host-ops.sh install-lystar-deploy-ops.sh install-lystar-backup-ops.sh install-lystar-incident-ops.sh \
     -x '*/__pycache__/*' '*.pyc' 'dist/*' 'runtime/rtk' 'runtime/rtk/*')

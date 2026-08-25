@@ -24,10 +24,32 @@ RELEASE_API = os.environ.get(
 )
 NETWORK_TIMEOUT = 20
 AUTO_INTERVAL_HOURS = 24
-STATE_FILE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / (
-    "lystar-devops-toolkit-skills/installed.json"
-)
 VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+
+
+def absolute_path(value: str | Path) -> Path:
+    return Path(os.path.abspath(os.path.expanduser(str(value))))
+
+
+def default_state_file() -> Path:
+    configured = os.environ.get("LYSTAR_UPDATE_STATE_FILE", "").strip()
+    if configured:
+        return absolute_path(configured)
+    configured_home = os.environ.get("LYSTAR_HOME", "").strip()
+    if configured_home:
+        return absolute_path(configured_home) / "state" / "update" / "installed.json"
+    default_home = absolute_path(Path.home() / ".lystar")
+    legacy_data = absolute_path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    legacy_config = absolute_path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    legacy_state = absolute_path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    if not default_home.exists() and any(
+        (root / "agent-ops").exists() for root in (legacy_data, legacy_config, legacy_state)
+    ):
+        return legacy_state / "lystar-devops-toolkit-skills" / "installed.json"
+    return default_home / "state" / "update" / "installed.json"
+
+
+STATE_FILE = default_state_file()
 
 
 def utc_now() -> str:
@@ -136,15 +158,25 @@ def record(args: argparse.Namespace) -> int:
     parse_version(version)
     state = load_state()
     previous = state["skills"].get(args.skill, {})
+    runtime_home = args.runtime_home or args.data_home or ""
+    if not runtime_home:
+        runtime_home = str(absolute_path(args.lystar_home or Path.home() / ".lystar") / "runtime")
+    lystar_home = args.lystar_home or str(Path(runtime_home).parent)
+    config_home = args.config_home or str(absolute_path(lystar_home) / "config")
+    state_home = args.state_home or str(absolute_path(lystar_home) / "state")
     state["skills"][args.skill] = {
         **previous,
         "version": version,
         "asset": args.asset,
-        "skill_homes": [str(Path(path).expanduser().resolve()) for path in args.skill_homes.splitlines() if path],
-        "data_home": str(Path(args.data_home).expanduser().resolve()),
-        "bin_home": str(Path(args.bin_home).expanduser().resolve()),
+        "skill_homes": [str(absolute_path(path)) for path in args.skill_homes.splitlines() if path],
+        "lystar_home": str(absolute_path(lystar_home)),
+        "runtime_home": str(absolute_path(runtime_home)),
+        "config_home": str(absolute_path(config_home)),
+        "state_home": str(absolute_path(state_home)),
+        "data_home": str(absolute_path(runtime_home)),
+        "bin_home": str(absolute_path(args.bin_home)),
         "python_bin": args.python_bin,
-        "server_home": str(Path(args.server_home).expanduser().resolve()) if args.server_home else "",
+        "server_home": str(absolute_path(args.server_home)) if args.server_home else "",
         "installed_at": utc_now(),
     }
     save_state(state)
@@ -188,14 +220,19 @@ def install_update(name: str, entry: dict[str, Any], release: dict[str, Any], qu
         if not installer.is_file():
             raise ValueError(f"{asset_name} 缺少 install.sh")
         environment = os.environ.copy()
-        environment.update(
-            {
-                "XDG_DATA_HOME": str(entry["data_home"]),
-                "XDG_BIN_HOME": str(entry["bin_home"]),
-                "PYTHON_BIN": str(entry["python_bin"]),
-                "LYSTAR_SKILL_UPDATE": "1",
-            }
-        )
+        lystar_home = entry.get("lystar_home") or str(Path(entry.get("runtime_home") or entry["data_home"]).parent)
+        environment.update({
+            "LYSTAR_HOME": str(lystar_home),
+            "LYSTAR_RUNTIME_HOME": str(entry.get("runtime_home") or entry["data_home"]),
+            "LYSTAR_CONFIG_HOME": str(entry.get("config_home") or Path(lystar_home) / "config"),
+            "LYSTAR_STATE_HOME": str(entry.get("state_home") or Path(lystar_home) / "state"),
+            "LYSTAR_BIN_HOME": str(entry["bin_home"]),
+            "LYSTAR_UPDATE_STATE_FILE": str(STATE_FILE),
+            "PYTHON_BIN": str(entry["python_bin"]),
+            "LYSTAR_SKILL_UPDATE": "1",
+        })
+        if entry.get("server_home"):
+            environment["LYSTAR_SERVER_HOME"] = str(entry["server_home"])
         subprocess.run(installer_command(installer, entry), cwd=package, env=environment, check=True)
     if not quiet:
         print(f"{name}: 更新完成")
@@ -239,7 +276,11 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--asset", required=True)
     record_parser.add_argument("--version-file", required=True)
     record_parser.add_argument("--skill-homes", required=True)
-    record_parser.add_argument("--data-home", required=True)
+    record_parser.add_argument("--lystar-home")
+    record_parser.add_argument("--runtime-home")
+    record_parser.add_argument("--config-home")
+    record_parser.add_argument("--state-home")
+    record_parser.add_argument("--data-home")
     record_parser.add_argument("--bin-home", required=True)
     record_parser.add_argument("--python-bin", required=True)
     record_parser.add_argument("--server-home")

@@ -50,7 +50,7 @@ backupx prune --repository ./backups --keep-last 5 --keep-days 30 --confirm
 
 ## 仓库和备份资产登记
 
-备份仓库和资产由全局注册表统一托管：`${XDG_CONFIG_HOME:-~/.config}/agent-ops/ops.toml`。仓库路径必须登记为绝对路径；显式传入 `--repository` 的旧命令仍然可用，省略时使用唯一登记的默认仓库：
+备份仓库和资产由全局注册表统一托管：`${LYSTAR_HOME:-$HOME/.lystar}/config/ops.toml`。仓库路径必须登记为绝对路径；显式传入 `--repository` 的旧命令仍然可用，省略时使用唯一登记的默认仓库：
 
 ```bash
 backupx repository register local-prod \

@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 . "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/_lystar-paths.sh"
-exec "${PYTHON_BIN:-python3}" "$LYSTAR_RUNTIME_HOME/scripts/skill_update.py" "$@"
+exec "${PYTHON_BIN:-python3}" "$LYSTAR_RUNTIME_HOME/scripts/migrate.py" "$@"

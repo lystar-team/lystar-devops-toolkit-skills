@@ -44,6 +44,20 @@ cd lystar-devops-toolkit-skills
 ./install-lystar-incident-ops.sh
 ```
 
+## 给 Agent 的直接安装指令
+
+下面两组命令可以直接交给 Agent 执行，不需要让 Agent 自己猜安装器、目录或 Skill 名称：
+
+```text
+请在当前仓库执行 ./install.sh --harness auto，安装全部六个 LYStar Skill，并在完成后验证 $HOME/.lystar/bin、$HOME/.lystar/config、$HOME/.lystar/state 和 $HOME/.lystar/servers。
+```
+
+```text
+请在当前仓库执行 ./install-lystar-ssh-ops.sh --harness codex，固定安装 lystar-ssh-ops；如果目标 Harness 不是 Codex，把 codex 替换为 opencode、claude 或 pi。完成后验证 sshx --help 和 $HOME/.lystar/servers/README.md。
+```
+
+固定 Skill 的安装脚本与名称必须一一对应：`install-lystar-db-ops.sh`、`install-lystar-host-ops.sh`、`install-lystar-deploy-ops.sh`、`install-lystar-backup-ops.sh`、`install-lystar-incident-ops.sh`。安装器不会把服务器资料软链接到 Harness 的 Skill 目录。
+
 也可以从 GitHub Release 下载独立包：
 
 ```bash
@@ -97,24 +111,34 @@ cd lystar-ssh-ops
 
 ## 安装位置
 
-默认位置：
+默认固定根目录是 `$HOME/.lystar`：
 
-- 命令：`${XDG_BIN_HOME:-~/.local/bin}/dbx`、`sshx`、`hostx`、`deployx`、`backupx`、`incidentx`、`lystar-skill-update`
-- 运行时：`${XDG_DATA_HOME:-~/.local/share}/agent-ops`
-- 配置：`${XDG_CONFIG_HOME:-~/.config}/agent-ops`
-- 状态与上次结果：`${XDG_STATE_HOME:-~/.local/state}/agent-ops`
-- 更新记录：`${XDG_STATE_HOME:-~/.local/state}/lystar-devops-toolkit-skills/installed.json`
-- 服务器资料：`${LYSTAR_SERVER_OPS_HOME:-~/lystar-server-list}`
+- 命令：`$HOME/.lystar/bin/` 下的 `dbx`、`sshx`、`hostx`、`deployx`、`backupx`、`incidentx`、`lystar-skill-update`、`lystar-migrate`
+- 运行时：`$HOME/.lystar/runtime/`
+- 配置：`$HOME/.lystar/config/`
+- 状态与结果：`$HOME/.lystar/state/`
+- 托管 recipe：`$HOME/.lystar/data/recipes/`
+- 服务器资料：`$HOME/.lystar/servers/`
 
-修改服务器资料目录：
+把命令目录加入 PATH：
+
+```bash
+export PATH="$HOME/.lystar/bin:$PATH"
+```
+
+`--server-home` 仍保留为旧环境和显式外部资料目录的兼容入口，标准安装不需要使用：
 
 ```bash
 ./install-lystar-ssh-ops.sh --server-home /private/server-list
 ```
 
-安装器会在每个已选 Harness 的 `lystar-ssh-ops/servers` 创建软链接。重复安装只更新 Skill 和程序，不覆盖已有服务器索引、模板或用户资料。
+服务器资料由所有 Harness 共享 `$HOME/.lystar/servers`。普通用户使用安装器创建的真实目录；Yean 等已有 Git 资料库的用户使用迁移命令显式创建软链接：
 
-如果命令找不到，把 `~/.local/bin` 加入 `PATH`。
+```bash
+lystar-migrate --server-link /绝对路径/服务器资料 Git 仓库
+```
+
+迁移工具只复制缺失的旧配置、运行时、状态和更新记录，不删除旧目录、不覆盖现有资料。
 
 ## 自动更新
 
@@ -123,7 +147,7 @@ cd lystar-ssh-ops
 1. 每个 Skill 最多每 24 小时请求一次 GitHub Latest Release。
 2. 发现更高的语义版本后，下载对应独立 ZIP。
 3. 下载并校验 Release 中的 `SHA256SUMS`。
-4. 使用首次安装时记录的 Skill 目录、XDG 目录和服务器资料目录重新安装。
+4. 使用首次安装时记录的 Skill 目录和 `$HOME/.lystar` 子目录重新安装。
 5. 检查或更新失败不会阻断当前 `dbx`、`sshx`、`hostx`、`deployx`、`backupx`、`incidentx` 命令。
 
 手工检查：
@@ -190,7 +214,7 @@ sshx exec prod --timeout 300 "slow-command"
 sshx run prod --timeout 300 "long-running-command"
 ```
 
-服务器资料由同一个 `lystar-ssh-ops` Skill 管理。资料入口位于 Skill 的 `servers/`，模板位于 `servers/_templates/`。
+服务器资料由同一个 `lystar-ssh-ops` Skill 管理。资料入口是 `${LYSTAR_SERVER_HOME:-$LYSTAR_HOME/servers}`，模板位于该目录的 `_templates/`；服务器目录使用稳定 ID，服务和主题分别放在 `services/`、`topics/`。
 
 `sshx forget` 会先检查全局注册表的 deployment、service 和 backup asset 影响。同一 profile 仍有其它 alias 时，引用会同步到存活 alias；删除最后一个 alias/profile 时默认阻断，只有 `sshx forget <alias> --confirm` 才会把 deployment/backup asset 标记为 `orphaned`。不会删除远端服务、目录、备份文件或 SSH 密码。
 
@@ -244,7 +268,7 @@ deployx apply prod --app mochu-admin \
 
 该策略会先核验 Nginx 绑定和 HTTP 健康检查，切换失败时恢复原目录；没有 deployx manifest 的历史或人工目录不会被自动清理。接入 deployx 不要求现有业务迁移成软链接目录。
 
-`deployx` 也统一托管项目、服务、环境和 recipe 注册信息。注册表位于 `${XDG_CONFIG_HOME:-~/.config}/agent-ops/ops.toml`，不改写旧 SSH/数据库配置：
+`deployx` 也统一托管项目、服务、环境和 recipe 注册信息。注册表位于 `${LYSTAR_HOME:-$HOME/.lystar}/config/ops.toml`，不改写旧 SSH/数据库配置：
 
 ```bash
 deployx project register mall-admin --name "商城后台" --local-path ./mall-admin
@@ -347,7 +371,7 @@ dbx source remove prod --json
 
 数据库写操作应由用户明确授权，执行后再用只读查询回查。
 
-## 从旧名称迁移
+## 从旧目录迁移
 
 本仓库开源后的正式名称为：
 
@@ -355,9 +379,15 @@ dbx source remove prod --json
 - `sql-multi-db-ops` -> `lystar-db-ops`
 - `lystar-server-ops` -> 合并到 `lystar-ssh-ops`
 
-安装新版时，如果旧 Skill 目录只是一个旧 `SKILL.md` 或旧软链接，安装器会自动删除。目录中有其它自定义文件时不会删除，会输出提示供用户人工确认。
+安装新版时，旧 `agent-ops` 的配置、SSH profile、数据库 profile、注册表 revision、结果快照、托管 recipe 和更新记录会复制到 `$HOME/.lystar` 的对应子目录。目标已有同名文件时跳过，不覆盖；旧目录保留为回退副本。
 
-原有 `dbx`、`sshx` 配置、连接状态和结果目录保持不变，升级不会迁移或清空用户数据。
+本机已有 Git 服务器资料时：
+
+```bash
+lystar-migrate --server-link /absolute/path/to/your-server-list
+```
+
+普通用户没有 Git 资料时不使用 `--server-link`，安装器会创建真实的 `$HOME/.lystar/servers`。迁移完成后，旧命令目录可以继续作为兼容入口，但正式 PATH 应使用 `$HOME/.lystar/bin`。
 
 ## 仓库结构
 
@@ -365,7 +395,7 @@ dbx source remove prod --json
 .
 ├── skills/                    # 六个 Skill 源文件
 ├── runtime/agent-ops/         # 六个命令的 Python 运行时与测试
-├── bin/                       # 用户命令入口
+├── bin/                       # 用户命令入口与统一路径脚本
 ├── templates/server-list/     # 空服务器资料模板
 ├── requirements/              # 全量和独立 Skill 依赖
 ├── scripts/                   # 安装公共库、更新器、打包脚本
@@ -378,7 +408,8 @@ dbx source remove prod --json
 ├── install-lystar-host-ops.sh
 ├── install-lystar-deploy-ops.sh
 ├── install-lystar-backup-ops.sh
-└── install-lystar-incident-ops.sh
+├── install-lystar-incident-ops.sh
+└── AGENTS.md                  # 给 Agent 的仓库级执行提示
 ```
 
 `dist/` 是构建产物，不提交 Git。运行：

@@ -60,7 +60,7 @@ deployx rollback prod --app mochu-admin \
 
 ## 注册与新服务 draft
 
-全局注册表位于 `${XDG_CONFIG_HOME:-~/.config}/agent-ops/ops.toml`，独立安装包会携带注册表运行时；旧 `sshx`/`dbx` 配置和密码不变。
+全局注册表位于 `${LYSTAR_HOME:-$HOME/.lystar}/config/ops.toml`，独立安装包会携带注册表运行时；旧 `sshx`/`dbx` 配置和密码不变。
 
 ```bash
 deployx project register mall-admin --name "商城后台" --local-path ./mall-admin

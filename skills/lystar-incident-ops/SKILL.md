@@ -74,7 +74,7 @@ incidentx verify ./incident-bundles/case-20260823
 ## 采集边界
 
 - 不扫描 home 目录，不读取凭据文件，不把任意远端目录打包进 bundle。
-- 注册表采集只读取全局 `${XDG_CONFIG_HOME:-~/.config}/agent-ops/ops.toml` 及其恢复逻辑，不修改 `ops.toml`、旧 SSH/数据库配置或密码；注册表不可读或请求对象不存在时保留明确失败状态。
+- 注册表采集只读取全局 `${LYSTAR_HOME:-$HOME/.lystar}/config/ops.toml` 及其恢复逻辑，不修改 `ops.toml`、旧 SSH/数据库配置或密码；注册表不可读或请求对象不存在时保留明确失败状态。
 - 不调用 `deployx apply`/`rollback`、`backupx restore`/`prune`、服务重启或 SQL 写操作。
 - 依赖不可用、连接失败、返回非 JSON 和部分 collector 失败都会保留明确状态。
 - bundle 输出目录必须为空或不存在，避免覆盖已有诊断现场。

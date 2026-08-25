@@ -37,6 +37,9 @@ for archive in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops ly
     test -x "$package/install.sh"
     test -f "$package/runtime/agent-ops/scripts/config_store.py"
     test -f "$package/runtime/agent-ops/scripts/registry_store.py"
+    test -f "$package/runtime/agent-ops/scripts/paths.py"
+    test -f "$package/runtime/agent-ops/scripts/migrate.py"
+    test -x "$package/bin/lystar-migrate"
     HOME="$temp/home-$archive" \
     XDG_DATA_HOME="$temp/data-$archive" \
     XDG_STATE_HOME="$temp/state-$archive" \
@@ -46,27 +49,28 @@ for archive in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops ly
 done
 
 test -f "$temp/home-lystar-db-ops/.codex/skills/lystar-db-ops/SKILL.md"
-test -x "$temp/bin-lystar-db-ops/dbx"
-test ! -e "$temp/bin-lystar-db-ops/sshx"
+test -x "$temp/home-lystar-db-ops/.lystar/bin/dbx"
+test ! -e "$temp/home-lystar-db-ops/.lystar/bin/sshx"
 test -f "$temp/home-lystar-ssh-ops/.codex/skills/lystar-ssh-ops/SKILL.md"
-test -L "$temp/home-lystar-ssh-ops/.codex/skills/lystar-ssh-ops/servers"
-test -x "$temp/bin-lystar-ssh-ops/sshx"
-test ! -e "$temp/bin-lystar-ssh-ops/dbx"
+test -d "$temp/home-lystar-ssh-ops/.lystar/servers"
+test ! -e "$temp/home-lystar-ssh-ops/.codex/skills/lystar-ssh-ops/servers"
+test -x "$temp/home-lystar-ssh-ops/.lystar/bin/sshx"
+test ! -e "$temp/home-lystar-ssh-ops/.lystar/bin/dbx"
 test -f "$temp/home-lystar-host-ops/.codex/skills/lystar-host-ops/SKILL.md"
-test -x "$temp/bin-lystar-host-ops/hostx"
-test ! -e "$temp/bin-lystar-host-ops/sshx"
+test -x "$temp/home-lystar-host-ops/.lystar/bin/hostx"
+test ! -e "$temp/home-lystar-host-ops/.lystar/bin/sshx"
 test -f "$temp/home-lystar-deploy-ops/.codex/skills/lystar-deploy-ops/SKILL.md"
-test -x "$temp/bin-lystar-deploy-ops/deployx"
-test ! -e "$temp/bin-lystar-deploy-ops/sshx"
-test ! -e "$temp/bin-lystar-deploy-ops/hostx"
+test -x "$temp/home-lystar-deploy-ops/.lystar/bin/deployx"
+test ! -e "$temp/home-lystar-deploy-ops/.lystar/bin/sshx"
+test ! -e "$temp/home-lystar-deploy-ops/.lystar/bin/hostx"
 test -f "$temp/home-lystar-backup-ops/.codex/skills/lystar-backup-ops/SKILL.md"
-test -x "$temp/bin-lystar-backup-ops/backupx"
-test ! -e "$temp/bin-lystar-backup-ops/dbx"
-test ! -e "$temp/bin-lystar-backup-ops/sshx"
+test -x "$temp/home-lystar-backup-ops/.lystar/bin/backupx"
+test ! -e "$temp/home-lystar-backup-ops/.lystar/bin/dbx"
+test ! -e "$temp/home-lystar-backup-ops/.lystar/bin/sshx"
 test -f "$temp/home-lystar-incident-ops/.codex/skills/lystar-incident-ops/SKILL.md"
-test -x "$temp/bin-lystar-incident-ops/incidentx"
-test ! -e "$temp/bin-lystar-incident-ops/hostx"
-test ! -e "$temp/bin-lystar-incident-ops/dbx"
+test -x "$temp/home-lystar-incident-ops/.lystar/bin/incidentx"
+test ! -e "$temp/home-lystar-incident-ops/.lystar/bin/hostx"
+test ! -e "$temp/home-lystar-incident-ops/.lystar/bin/dbx"
 
 complete="$temp/complete"
 mkdir -p "$complete"
@@ -78,8 +82,9 @@ XDG_BIN_HOME="$temp/bin-complete" \
 PYTHON_BIN="$fake_python" \
     sh "$complete/install.sh" --harness codex,pi >/dev/null
 for command in dbx sshx hostx deployx backupx incidentx lystar-skill-update; do
-    test -x "$temp/bin-complete/$command"
+    test -x "$temp/home-complete/.lystar/bin/$command"
 done
+test -x "$temp/home-complete/.lystar/bin/lystar-migrate"
 for skills_home in "$temp/home-complete/.codex/skills" "$temp/home-complete/.pi/agent/skills"; do
     test -f "$skills_home/lystar-db-ops/SKILL.md"
     test -f "$skills_home/lystar-ssh-ops/SKILL.md"
@@ -87,7 +92,7 @@ for skills_home in "$temp/home-complete/.codex/skills" "$temp/home-complete/.pi/
     test -f "$skills_home/lystar-deploy-ops/SKILL.md"
     test -f "$skills_home/lystar-backup-ops/SKILL.md"
     test -f "$skills_home/lystar-incident-ops/SKILL.md"
-    test -L "$skills_home/lystar-ssh-ops/servers"
+    test ! -e "$skills_home/lystar-ssh-ops/servers"
 done
 
 for archive in "$root"/dist/*.zip; do

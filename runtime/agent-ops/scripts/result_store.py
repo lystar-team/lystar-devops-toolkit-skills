@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from config_store import lock_files
+import paths
 
 
 TTL_SECONDS = 72 * 60 * 60
@@ -24,8 +25,7 @@ SESSION_ENV = (
 
 
 def results_root() -> Path:
-    state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-    return state_home / "agent-ops" / "results"
+    return paths.state_home() / "results"
 
 
 def session_identity() -> tuple[str, str] | None:

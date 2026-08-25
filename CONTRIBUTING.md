@@ -12,10 +12,11 @@ python3 -m pip install -r requirements/all.txt
 
 - `lystar-ssh-ops` 和 `lystar-db-ops` 必须保持可单独安装。
 - 不提交真实服务器资料、数据库连接、密码、私钥、Token、Cookie 或运行结果。
-- 用户配置和状态目录要向后兼容；改名不能清空现有 `agent-ops` 数据。
+- 用户配置和状态目录统一写入 `$HOME/.lystar`；旧 `agent-ops` 数据必须通过只复制缺失目标的迁移逻辑兼容，不能清空或覆盖。
 - 新增 Harness 时，先确认其官方全局 Skill 目录，再补探测、README 和安装测试。
 - 修改 SSH 默认行为时，同时更新 CLI 测试和 Skill 文档。
 - 修改更新协议时，同时更新 `tests/test_update.sh`。
+- 修改服务器资料模板时，同时更新根 README、`lystar-ssh-ops` Skill 和独立包 README；标准服务文档放在服务器目录的 `services/`，运维主题放在 `topics/`。
 
 ## 验证
 

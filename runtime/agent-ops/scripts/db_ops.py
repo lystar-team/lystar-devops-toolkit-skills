@@ -17,10 +17,10 @@ import db_core as core
 import registry_store
 import result_store
 from config_store import FileTransaction, load_toml, lock_files, write_toml
+import paths
 
 
-CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-CONFIG_DIR = CONFIG_HOME / "agent-ops"
+CONFIG_DIR = paths.config_home()
 DATABASES_FILE = CONFIG_DIR / "databases.toml"
 PROJECTS_DIR = CONFIG_DIR / "projects"
 

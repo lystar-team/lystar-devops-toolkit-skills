@@ -15,8 +15,9 @@ remove_legacy_skill sql-multi-db-ops
 record_skill_installation lystar-db-ops
 verify_command dbx
 verify_command lystar-skill-update
+verify_command lystar-migrate
 
 echo "lystar-db-ops 安装完成："
-echo "  命令：$bin_home/dbx、$bin_home/lystar-skill-update"
+echo "  命令：$bin_home/dbx、$bin_home/lystar-skill-update、$bin_home/lystar-migrate"
 print_skill_locations lystar-db-ops
 print_path_notice

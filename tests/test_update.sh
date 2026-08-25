@@ -8,14 +8,18 @@ trap 'test -z "$server_pid" || kill "$server_pid" 2>/dev/null || true; rm -rf "$
 
 # 先安装 0.1.0 到两个自定义 Harness 目录。
 home="$temp/home"
-state="$temp/state"
-data="$temp/data"
-bin="$temp/bin"
+state="$home/.lystar/state"
+data="$home/.lystar/runtime"
+bin="$home/.lystar/bin"
 skills_a="$temp/skills-a"
 skills_b="$temp/skills-b"
 server_home="$temp/server-list"
+initial_source="$temp/initial-source"
+cp -R "$root" "$initial_source"
+rm -rf "$initial_source/.git" "$initial_source/dist"
+printf '%s\n' '0.1.0' >"$initial_source/VERSION"
 HOME="$home" XDG_STATE_HOME="$state" XDG_DATA_HOME="$data" XDG_BIN_HOME="$bin" \
-    sh "$root/install-lystar-ssh-ops.sh" \
+    sh "$initial_source/install-lystar-ssh-ops.sh" \
         --skills-home "$skills_a" --skills-home "$skills_b" --server-home "$server_home" >/dev/null
 
 test "$(cat "$skills_a/lystar-ssh-ops/VERSION")" = "0.1.0"
@@ -85,7 +89,7 @@ LYSTAR_SKILL_RELEASE_API="http://127.0.0.1:$port/release.json" \
 grep -q '0.1.0 -> 0.2.0 (可更新)' "$temp/check.out"
 
 # 把检查时间调早，由 sshx 启动时的 auto 路径触发更新。
-python3 - "$state/lystar-devops-toolkit-skills/installed.json" <<'PY'
+python3 - "$state/update/installed.json" <<'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -103,18 +107,19 @@ test "$(cat "$skills_b/lystar-ssh-ops/VERSION")" = "0.2.0"
 grep -q '更新测试标记：0.2.0' "$skills_a/lystar-ssh-ops/SKILL.md"
 grep -q '^用户资料不可覆盖$' "$server_home/README.md"
 
-python3 - "$state/lystar-devops-toolkit-skills/installed.json" <<'PY'
+python3 - "$state/update/installed.json" <<'PY'
 import json
 import sys
 state = json.load(open(sys.argv[1], encoding="utf-8"))
 entry = state["skills"]["lystar-ssh-ops"]
 assert entry["version"] == "0.2.0"
 assert len(entry["skill_homes"]) == 2
+assert entry["lystar_home"].endswith("/.lystar")
 assert entry["server_home"].endswith("server-list")
 PY
 
 # 哈希错误必须拒绝安装。先把本地记录降到 0.1.0，确保会重新下载。
-python3 - "$state/lystar-devops-toolkit-skills/installed.json" <<'PY'
+python3 - "$state/update/installed.json" <<'PY'
 import json
 import sys
 path = sys.argv[1]

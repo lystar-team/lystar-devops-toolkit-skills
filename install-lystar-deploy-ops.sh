@@ -14,8 +14,9 @@ install_regular_skill lystar-deploy-ops
 record_skill_installation lystar-deploy-ops
 verify_command deployx
 verify_command lystar-skill-update
+verify_command lystar-migrate
 
 echo "lystar-deploy-ops 安装完成："
-echo "  命令：$bin_home/deployx、$bin_home/lystar-skill-update"
+echo "  命令：$bin_home/deployx、$bin_home/lystar-skill-update、$bin_home/lystar-migrate"
 print_skill_locations lystar-deploy-ops
 print_path_notice

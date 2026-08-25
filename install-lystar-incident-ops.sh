@@ -14,8 +14,9 @@ install_regular_skill lystar-incident-ops
 record_skill_installation lystar-incident-ops
 verify_command incidentx
 verify_command lystar-skill-update
+verify_command lystar-migrate
 
 echo "lystar-incident-ops 安装完成："
-echo "  命令：$bin_home/incidentx、$bin_home/lystar-skill-update"
+echo "  命令：$bin_home/incidentx、$bin_home/lystar-skill-update、$bin_home/lystar-migrate"
 print_skill_locations lystar-incident-ops
 print_path_notice

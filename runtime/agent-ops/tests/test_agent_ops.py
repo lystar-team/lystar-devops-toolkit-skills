@@ -447,6 +447,10 @@ class SshOutputTest(unittest.TestCase):
     def test_default_ssh_timeout_is_120_seconds(self) -> None:
         parser = ssh_ops.build_parser()
         self.assertEqual(parser.parse_args(["open", "prod", "root@example.com"]).timeout, 120)
+        self.assertEqual(
+            parser.parse_args(["open", "prod", "root@example.com", "--idle-timeout", "5"]).idle_timeout,
+            5,
+        )
         self.assertEqual(parser.parse_args(["exec", "prod", "true"]).timeout, 120)
         self.assertEqual(
             parser.parse_args(["open", "prod", "root@example.com", "--jump", "bastion", "--jump", "inner"]).jump,
@@ -1554,6 +1558,123 @@ class SshReapTest(unittest.TestCase):
                 time.sleep(0.05)
                 ssh_ops.reap_stale()
                 ssh_ops.RUN_DIR, ssh_ops.BASE_DIR = old_run, old_base
+
+
+class SshDaemonLifecycleTest(unittest.TestCase):
+    def make_env(self, root: Path, idle_timeout: str = "") -> dict[str, str]:
+        env = {
+            **os.environ,
+            "LYSTAR_HOME": str(root / "home"),
+            "LYSTAR_SKILL_AUTO_UPDATE": "0",
+            "PI_SESSION_ID": "ssh-daemon-lifecycle",
+        }
+        if idle_timeout:
+            env["SSHX_IDLE_TIMEOUT"] = idle_timeout
+        return env
+
+    def run_sshx(self, env: dict[str, str], *args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "ssh_ops.py"), *args],
+            env=env,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            timeout=15,
+        )
+
+    def test_idle_daemon_exits_and_reopens_on_demand(self) -> None:
+        service = MockSshService()
+        service.start()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = self.make_env(root, "1")
+            try:
+                opened = self.run_sshx(
+                    env,
+                    "open", "local", f"tester@127.0.0.1:{service.port}",
+                    "plain-password", "--idle-timeout", "1",
+                    cwd=root,
+                )
+                self.assertEqual(opened.returncode, 0, opened.stderr + opened.stdout)
+                time.sleep(2)
+
+                status = self.run_sshx(env, "status", "--json", "local", cwd=root)
+                self.assertEqual(status.returncode, 0, status.stderr + status.stdout)
+                status_payload = json.loads(status.stdout)["connections"][0]
+                self.assertFalse(status_payload["connected"])
+                self.assertEqual(status_payload["last_exit"]["reason"], "idle_timeout")
+
+                reopened = self.run_sshx(env, "local", "echo reopened", cwd=root)
+                self.assertEqual(reopened.returncode, 0, reopened.stderr + reopened.stdout)
+                self.assertEqual(reopened.stdout, "ran:echo reopened\n")
+            finally:
+                self.run_sshx(env, "close", "local", cwd=root)
+        service.close()
+
+    def test_concurrent_open_starts_one_daemon(self) -> None:
+        service = MockSshService()
+        service.start()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = self.make_env(root, "30")
+            processes = [
+                subprocess.Popen(
+                    [
+                        sys.executable, str(SCRIPTS / "ssh_ops.py"),
+                        "open", "local", f"tester@127.0.0.1:{service.port}",
+                        "plain-password", "--idle-timeout", "30",
+                    ],
+                    env=env,
+                    cwd=root,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                for _ in range(6)
+            ]
+            try:
+                results = [process.communicate(timeout=15) for process in processes]
+                self.assertTrue(
+                    all(process.returncode == 0 for process in processes),
+                    "\n".join(stderr + stdout for (stdout, stderr) in results),
+                )
+                profile_id = json.loads(results[0][0])["profile"]
+                self.assertEqual(len(ssh_ops.daemon_process_pids(profile_id)), 1)
+            finally:
+                self.run_sshx(env, "close", "local", cwd=root)
+        service.close()
+
+    def test_closed_forward_is_removed_from_active_object_table(self) -> None:
+        class StubForward:
+            def __init__(self) -> None:
+                self.forward_id = "fwd-test"
+                self.state = "open"
+
+            def close(self) -> dict[str, object]:
+                self.state = "closed"
+                return {"forward_id": self.forward_id, "state": self.state, "closed": True}
+
+            def snapshot(self) -> dict[str, object]:
+                return {"forward_id": self.forward_id, "state": self.state}
+
+        daemon = ssh_ops.Daemon.__new__(ssh_ops.Daemon)
+        daemon.profile_id = "profile"
+        daemon.forward_lock = threading.Lock()
+        daemon.forwards = {"fwd-test": StubForward()}
+        daemon.closed_forwards = {}
+
+        result = daemon.close_forward("fwd-test")
+        self.assertTrue(result["closed"])
+        self.assertEqual(daemon.forwards, {})
+        self.assertEqual(daemon.forward_list("fwd-test")["forwards"][0]["state"], "closed")
+
+    def test_run_close_returns_nonzero_when_close_fails(self) -> None:
+        with patch.object(ssh_ops, "load_config", return_value={"profiles": {"profile": {}}}), \
+             patch.object(ssh_ops, "resolve_profile_chain", return_value=[]), \
+             patch.object(ssh_ops, "close_profile", return_value={"profile": "profile", "error": "still running"}):
+            with redirect_stdout(io.StringIO()):
+                result = ssh_ops.run_close(argparse.Namespace(all=True, alias=None))
+        self.assertEqual(result, 1)
 
 
 if __name__ == "__main__":

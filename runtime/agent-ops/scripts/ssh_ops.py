@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import contextlib
 import datetime as dt
 import hashlib
 import io
@@ -24,19 +25,27 @@ from typing import Any
 
 import paramiko
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the supported runtime is Unix-like.
+    fcntl = None
+
 import registry_store
 import result_store
 from config_store import FileTransaction, load_toml, lock_files, write_toml
+import paths
 
 
-CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-CONFIG_FILE = CONFIG_HOME / "agent-ops" / "ssh.toml"
-BASE_DIR = STATE_HOME / "agent-ops" / "ssh"
-RUN_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", BASE_DIR / "run")) / "agent-ops-ssh"
+CONFIG_FILE = paths.config_home() / "ssh.toml"
+BASE_DIR = paths.state_home() / "ssh"
+if paths.legacy_mode():
+    RUN_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", str(BASE_DIR / "run"))) / "agent-ops-ssh"
+else:
+    RUN_DIR = BASE_DIR / "run"
 SCRIPT = Path(__file__).resolve()
 DEFAULT_PORT = 22
 DEFAULT_TIMEOUT = 120
+DEFAULT_IDLE_TIMEOUT = 15 * 60
 DEFAULT_SFTP_CHUNK_SIZE = 4 * 1024 * 1024
 COMMANDS = {
     "open", "status", "close", "forget", "reap", "exec", "run", "job",
@@ -49,6 +58,7 @@ CACHE_ACTIONS = {
 }
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 FORWARD_CHUNK_BYTES = 64 * 1024
+MAX_CLOSED_FORWARD_HISTORY = 32
 
 
 class RegistryReferenceError(ValueError):
@@ -342,19 +352,149 @@ def exit_path(profile_id: str) -> Path:
     return BASE_DIR / f"{profile_id}.last-exit.json"
 
 
-def pid_alive(profile_id: str) -> bool:
+def daemon_lock_path(profile_id: str) -> Path:
+    return RUN_DIR / f"{profile_id}.lock"
+
+
+def configured_idle_timeout(value: int | None = None) -> int:
+    if value is not None:
+        if value < 0:
+            raise ValueError("idle timeout must be zero or greater")
+        return value
+    for name in ("SSHX_IDLE_TIMEOUT", "LYSTAR_SSH_IDLE_TIMEOUT"):
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = int(raw)
+        except ValueError:
+            continue
+        if parsed >= 0:
+            return parsed
+    return DEFAULT_IDLE_TIMEOUT
+
+
+@contextlib.contextmanager
+def daemon_start_lock(profile_id: str):
+    """Serialize daemon discovery and startup for one SSH profile."""
+
+    ensure_dirs()
+    lock_file = daemon_lock_path(profile_id).open("a+")
     try:
-        pid = int(pid_path(profile_id).read_text(encoding="utf-8").strip())
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def read_pid_record(profile_id: str) -> tuple[int | None, str]:
+    path = pid_path(profile_id)
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None, ""
+    if not raw:
+        return None, ""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            return int(raw), ""
+        except ValueError:
+            return None, ""
+    if isinstance(payload, int):
+        return (payload if payload > 0 else None), ""
+    if not isinstance(payload, dict):
+        return None, ""
+    try:
+        pid = int(payload.get("pid", 0))
+    except (TypeError, ValueError):
+        return None, ""
+    token = str(payload.get("token", ""))
+    return (pid if pid > 0 else None), token
+
+
+def write_pid_record(profile_id: str, token: str) -> None:
+    write_json(
+        pid_path(profile_id),
+        {"pid": os.getpid(), "profile": profile_id, "token": token},
+    )
+
+
+def runtime_owned(profile_id: str, token: str) -> bool:
+    _pid, current_token = read_pid_record(profile_id)
+    return bool(token) and current_token == token
+
+
+def process_commandline(pid: int) -> list[str]:
+    try:
+        raw = Path("/proc").joinpath(str(pid), "cmdline").read_bytes()
+    except (FileNotFoundError, OSError):
+        return []
+    return [item.decode(errors="replace") for item in raw.split(b"\0") if item]
+
+
+def daemon_process_pids(profile_id: str) -> set[int]:
+    """Find live sshx daemon processes even if an old daemon overwrote the PID file."""
+
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return set()
+    pids: set[int] = set()
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return set()
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == os.getpid():
+            continue
+        argv = process_commandline(pid)
+        if not argv or "daemon" not in argv:
+            continue
+        try:
+            profile_index = argv.index("--profile-id")
+        except ValueError:
+            continue
+        if profile_index + 1 >= len(argv) or argv[profile_index + 1] != profile_id:
+            continue
+        if any(Path(item).name == SCRIPT.name for item in argv):
+            pids.add(pid)
+    return pids
+
+
+def socket_accepting(path: Path, timeout: float = 0.2) -> bool:
+    if not path.exists():
+        return False
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        try:
+            sock.connect(str(path))
+        except (FileNotFoundError, ConnectionRefusedError, OSError):
+            return False
+        return True
+
+
+def pid_alive(profile_id: str) -> bool:
+    pid, _token = read_pid_record(profile_id)
+    if pid is None:
+        return False
+    try:
         os.kill(pid, 0)
         return True
-    except (FileNotFoundError, ValueError, ProcessLookupError):
+    except ProcessLookupError:
         return False
     except PermissionError:
         return True
 
 
 def daemon_running(profile_id: str) -> bool:
-    return pid_alive(profile_id)
+    return pid_alive(profile_id) or bool(daemon_process_pids(profile_id))
 
 
 def reap_stale() -> list[str]:
@@ -362,15 +502,20 @@ def reap_stale() -> list[str]:
     removed: list[str] = []
     profile_ids = {path.stem for path in RUN_DIR.glob("*.sock")}
     profile_ids.update(path.stem for path in RUN_DIR.glob("*.pid"))
+    profile_ids.update(
+        path.name[: -len(".ready.json")]
+        for path in RUN_DIR.glob("*.ready.json")
+    )
     for profile_id in profile_ids:
-        if pid_alive(profile_id):
-            continue
-        for path in (socket_path(profile_id), pid_path(profile_id), ready_path(profile_id)):
-            try:
-                path.unlink()
-                removed.append(str(path))
-            except FileNotFoundError:
-                pass
+        with daemon_start_lock(profile_id):
+            if pid_alive(profile_id) or daemon_process_pids(profile_id):
+                continue
+            for path in (socket_path(profile_id), pid_path(profile_id), ready_path(profile_id)):
+                try:
+                    path.unlink()
+                    removed.append(str(path))
+                except FileNotFoundError:
+                    pass
     return removed
 
 
@@ -533,6 +678,18 @@ class PortForward:
         self.closed_at = ""
         self.active_connections = 0
         self.last_error = ""
+        self.resources: dict[int, Any] = {}
+        self.connection_threads: set[threading.Thread] = set()
+
+    def _track_resource(self, resource: Any) -> None:
+        with self.lock:
+            self.resources[id(resource)] = resource
+
+    def _untrack_resource(self, resource: Any | None) -> None:
+        if resource is None:
+            return
+        with self.lock:
+            self.resources.pop(id(resource), None)
 
     def start(self) -> None:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -568,12 +725,16 @@ class PortForward:
 
             with self.lock:
                 self.active_connections += 1
-            threading.Thread(
+            worker = threading.Thread(
                 target=self._bridge,
                 args=(client, address),
                 name=f"sshx-forward-connection-{self.forward_id}",
                 daemon=True,
-            ).start()
+            )
+            self._track_resource(client)
+            with self.lock:
+                self.connection_threads.add(worker)
+            worker.start()
 
     def _set_error(self, message: str) -> None:
         with self.lock:
@@ -594,6 +755,7 @@ class PortForward:
                 address,
                 timeout=self.daemon.connection_timeout,
             )
+            self._track_resource(channel)
             channel.settimeout(0.5)
             client.settimeout(0.5)
 
@@ -630,6 +792,9 @@ class PortForward:
                     pass
             with self.lock:
                 self.active_connections = max(0, self.active_connections - 1)
+                self.connection_threads.discard(threading.current_thread())
+            self._untrack_resource(channel)
+            self._untrack_resource(client)
 
     def close(self) -> dict[str, Any]:
         with self.lock:
@@ -645,8 +810,19 @@ class PortForward:
                 listener.close()
             except OSError:
                 pass
+        with self.lock:
+            resources = list(self.resources.values())
+            threads = list(self.connection_threads)
+        for resource in resources:
+            try:
+                resource.close()
+            except (OSError, EOFError, paramiko.SSHException):
+                pass
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1)
+        for worker in threads:
+            if worker is not threading.current_thread():
+                worker.join(timeout=1)
         return {**self.snapshot(), "closed": was_open}
 
     def snapshot(self) -> dict[str, Any]:
@@ -1227,9 +1403,17 @@ def remote_job_cancel(
 
 
 class Daemon:
-    def __init__(self, profile_id: str, timeout: int = DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        profile_id: str,
+        timeout: int = DEFAULT_TIMEOUT,
+        idle_timeout: int | None = None,
+        token: str = "",
+    ):
         self.profile_id = profile_id
         self.connection_timeout = timeout
+        self.idle_timeout = configured_idle_timeout(idle_timeout)
+        self.owner_token = token or uuid.uuid4().hex
         self.client: paramiko.SSHClient | None = None
         self.clients: list[paramiko.SSHClient] = []
         self.proxy_channels: list[paramiko.Channel] = []
@@ -1238,7 +1422,10 @@ class Daemon:
         self.closed = threading.Event()
         self.connect_lock = threading.Lock()
         self.forward_lock = threading.Lock()
+        self.activity_lock = threading.Lock()
         self.forwards: dict[str, PortForward] = {}
+        self.closed_forwards: dict[str, dict[str, Any]] = {}
+        self.active_requests = 0
         self.sock_path = socket_path(profile_id)
         self.ensure_connected()
 
@@ -1255,12 +1442,52 @@ class Daemon:
     def close_connection(self) -> None:
         with self.forward_lock:
             forwards = list(self.forwards.values())
+            self.forwards.clear()
         for forward in forwards:
-            forward.close()
+            closed = forward.close()
+            self._remember_closed_forward(closed)
         close_connection_chain(self.clients, self.proxy_channels)
         self.client = None
         self.clients = []
         self.proxy_channels = []
+
+    def _remember_closed_forward(self, snapshot: dict[str, Any]) -> None:
+        forward_id = str(snapshot.get("forward_id", ""))
+        if not forward_id:
+            return
+        with self.forward_lock:
+            self.closed_forwards[forward_id] = dict(snapshot)
+            while len(self.closed_forwards) > MAX_CLOSED_FORWARD_HISTORY:
+                oldest = next(iter(self.closed_forwards))
+                self.closed_forwards.pop(oldest, None)
+
+    def _touch(self) -> None:
+        with self.activity_lock:
+            self.last_used = time.time()
+
+    def _request_started(self) -> None:
+        with self.activity_lock:
+            self.active_requests += 1
+            self.last_used = time.time()
+
+    def _request_finished(self) -> None:
+        with self.activity_lock:
+            self.active_requests = max(0, self.active_requests - 1)
+            self.last_used = time.time()
+
+    def _has_active_forwards(self) -> bool:
+        with self.forward_lock:
+            return any(forward.state != "closed" for forward in self.forwards.values())
+
+    def _idle_expired(self) -> bool:
+        if self.idle_timeout <= 0:
+            return False
+        with self.activity_lock:
+            active_requests = self.active_requests
+            last_used = self.last_used
+        if active_requests or self._has_active_forwards():
+            return False
+        return time.time() - last_used >= self.idle_timeout
 
     def open_forward(self, payload: dict[str, Any]) -> dict[str, Any]:
         bind_host = str(payload.get("bind_host", "127.0.0.1"))
@@ -1286,29 +1513,40 @@ class Daemon:
         forward.start()
         with self.forward_lock:
             self.forwards[forward_id] = forward
+            self.closed_forwards.pop(forward_id, None)
         return forward.snapshot()
 
     def forward_list(self, forward_id: str = "") -> dict[str, Any]:
         with self.forward_lock:
             forwards = list(self.forwards.values())
+            closed_forwards = list(self.closed_forwards.values())
         if forward_id:
             forwards = [forward for forward in forwards if forward.forward_id == forward_id]
+            closed_forwards = [
+                forward for forward in closed_forwards
+                if forward.get("forward_id") == forward_id
+            ]
         return {
             "profile": self.profile_id,
-            "forwards": [forward.snapshot() for forward in forwards],
+            "forwards": [forward.snapshot() for forward in forwards] + closed_forwards,
         }
 
     def close_forward(self, forward_id: str) -> dict[str, Any]:
         with self.forward_lock:
-            forward = self.forwards.get(forward_id)
+            forward = self.forwards.pop(forward_id, None)
+            closed_snapshot = self.closed_forwards.get(forward_id)
         if not forward:
+            if closed_snapshot:
+                return {"profile": self.profile_id, **closed_snapshot, "closed": False}
             return {
                 "profile": self.profile_id,
                 "forward_id": forward_id,
                 "state": "not_found",
                 "closed": False,
             }
-        return {"profile": self.profile_id, **forward.close()}
+        closed = forward.close()
+        self._remember_closed_forward(closed)
+        return {"profile": self.profile_id, **closed}
 
     def ensure_connected(self) -> paramiko.SSHClient:
         if self.chain_connected():
@@ -1330,6 +1568,8 @@ class Daemon:
     def status(self) -> dict[str, Any]:
         config = load_config()
         profile = config.get("profiles", {}).get(self.profile_id, {})
+        with self.activity_lock:
+            idle_seconds = int(time.time() - self.last_used)
         return {
             "profile": self.profile_id,
             "aliases": aliases_for(config, self.profile_id),
@@ -1339,10 +1579,12 @@ class Daemon:
             "jumps": profile_jump_aliases(config, profile),
             "connected": transport_connected(self.client),
             "started_at": dt.datetime.fromtimestamp(self.started_at, dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            "idle_seconds": int(time.time() - self.last_used),
+            "idle_seconds": idle_seconds,
+            "idle_timeout": self.idle_timeout,
         }
 
     def perform(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._touch()
         action = payload.get("action")
         if action == "status":
             return self.status()
@@ -1351,7 +1593,6 @@ class Daemon:
             return {"closed": True, "profile": self.profile_id}
 
         client = self.ensure_connected()
-        self.last_used = time.time()
         operation_timeout = int(payload.get("timeout", DEFAULT_TIMEOUT))
         if action == "forward_open":
             return {"profile": self.profile_id, **self.open_forward(payload)}
@@ -1411,39 +1652,83 @@ class Daemon:
         raise ValueError(f"unknown action: {action}")
 
     def handle_connection(self, conn: socket.socket) -> None:
-        with conn:
+        self._request_started()
+        try:
+            with conn:
+                try:
+                    chunks: list[bytes] = []
+                    while True:
+                        chunk = conn.recv(1024 * 1024)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    reply = self.perform(json.loads(b"".join(chunks).decode()))
+                except Exception as exc:
+                    reply = {"error": str(exc)}
+                try:
+                    conn.sendall(json.dumps(reply, ensure_ascii=False).encode())
+                except OSError:
+                    pass
+        finally:
+            self._request_finished()
+
+    def _prepare_socket(self) -> None:
+        if not self.sock_path.exists():
+            return
+        if socket_accepting(self.sock_path):
+            raise RuntimeError(f"SSH daemon socket is already in use: {self.profile_id}")
+        if pid_alive(self.profile_id) or daemon_process_pids(self.profile_id):
+            raise RuntimeError(f"SSH daemon process is already running: {self.profile_id}")
+        try:
+            self.sock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _cleanup_runtime_files(self, reason: str) -> None:
+        if not runtime_owned(self.profile_id, self.owner_token):
+            return
+        write_json(
+            exit_path(self.profile_id),
+            {"at": utc_now(), "profile": self.profile_id, "token": self.owner_token, "reason": reason},
+        )
+        for path in (self.sock_path, pid_path(self.profile_id), ready_path(self.profile_id)):
             try:
-                chunks: list[bytes] = []
-                while True:
-                    chunk = conn.recv(1024 * 1024)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                reply = self.perform(json.loads(b"".join(chunks).decode()))
-            except Exception as exc:
-                reply = {"error": str(exc)}
-            try:
-                conn.sendall(json.dumps(reply, ensure_ascii=False).encode())
-            except OSError:
+                path.unlink()
+            except FileNotFoundError:
                 pass
 
     def serve(self, ready_file: str) -> int:
         signal.signal(signal.SIGTERM, lambda *_: self.closed.set())
         signal.signal(signal.SIGINT, lambda *_: self.closed.set())
-        try:
-            self.sock_path.unlink()
-        except FileNotFoundError:
-            pass
+        self._prepare_socket()
         reason = "closed"
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
                 server.bind(str(self.sock_path))
                 os.chmod(self.sock_path, 0o600)
                 server.listen(16)
-                server.settimeout(1)
-                pid_path(self.profile_id).write_text(str(os.getpid()), encoding="utf-8")
-                write_json(Path(ready_file), {"ok": True, "profile": self.profile_id})
+                write_pid_record(self.profile_id, self.owner_token)
+                write_json(
+                    Path(ready_file),
+                    {
+                        "ok": True,
+                        "profile": self.profile_id,
+                        "pid": os.getpid(),
+                        "token": self.owner_token,
+                        "idle_timeout": self.idle_timeout,
+                    },
+                )
                 while not self.closed.is_set():
+                    if self._idle_expired():
+                        reason = "idle_timeout"
+                        self.closed.set()
+                        break
+                    accept_timeout = 1.0
+                    if self.idle_timeout > 0:
+                        with self.activity_lock:
+                            remaining = self.idle_timeout - (time.time() - self.last_used)
+                        accept_timeout = max(0.1, min(1.0, remaining))
+                    server.settimeout(accept_timeout)
                     try:
                         conn, _ = server.accept()
                     except socket.timeout:
@@ -1454,22 +1739,31 @@ class Daemon:
             raise
         finally:
             self.close_connection()
-            write_json(exit_path(self.profile_id), {"at": utc_now(), "reason": reason})
-            for path in (self.sock_path, pid_path(self.profile_id), ready_path(self.profile_id)):
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
+            self._cleanup_runtime_files(reason)
         return 0
 
 
 def run_daemon(args: argparse.Namespace) -> int:
     ensure_dirs()
     try:
-        return Daemon(args.profile_id, args.timeout).serve(args.ready_file)
+        return Daemon(
+            args.profile_id,
+            args.timeout,
+            getattr(args, "idle_timeout", None),
+            getattr(args, "token", ""),
+        ).serve(args.ready_file)
     except Exception as exc:
-        write_json(Path(args.ready_file), {"ok": False, "error": str(exc)})
-        write_json(exit_path(args.profile_id), {"at": utc_now(), "reason": str(exc)})
+        token = str(getattr(args, "token", ""))
+        current_pid, current_token = read_pid_record(args.profile_id)
+        if not current_pid or not current_token or current_token == token:
+            write_json(
+                Path(args.ready_file),
+                {"ok": False, "profile": args.profile_id, "token": token, "error": str(exc)},
+            )
+            write_json(
+                exit_path(args.profile_id),
+                {"at": utc_now(), "profile": args.profile_id, "token": token, "reason": str(exc)},
+            )
         return 1
 
 
@@ -1481,46 +1775,84 @@ def daemon_ready_timeout(profile_id: str, timeout: int) -> int:
     return max(timeout, timeout * hop_count)
 
 
-def start_daemon(profile_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def start_daemon(
+    profile_id: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    idle_timeout: int | None = None,
+) -> dict[str, Any]:
     ensure_dirs()
     reap_stale()
-    if daemon_running(profile_id):
-        return {"started": False, "profile": profile_id}
-    ready = ready_path(profile_id)
-    try:
-        ready.unlink()
-    except FileNotFoundError:
-        pass
-    command = [
-        sys.executable, str(SCRIPT), "daemon", "--profile-id", profile_id,
-        "--ready-file", str(ready),
-        "--timeout", str(timeout),
-    ]
-    log = log_path(profile_id).open("ab")
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=log,
-        stderr=log,
-        start_new_session=True,
-    )
-    log.close()
-    deadline = time.time() + daemon_ready_timeout(profile_id, timeout)
-    ready_payload: dict[str, Any] | None = None
-    while time.time() < deadline:
-        if ready.exists():
-            ready_payload = read_json(ready, {"ok": False, "error": "invalid ready file"})
-            break
-        if process.poll() is not None:
-            break
-        time.sleep(0.1)
-    if not ready_payload:
-        ready_payload = {"ok": False, "error": "SSH daemon did not become ready"}
-    if not ready_payload.get("ok"):
-        if process.poll() is None:
-            process.terminate()
-        return {"error": ready_payload.get("error", "failed to open SSH connection")}
-    return {"started": True, "profile": profile_id}
+    with daemon_start_lock(profile_id):
+        if daemon_running(profile_id):
+            return {"started": False, "profile": profile_id}
+        if socket_accepting(socket_path(profile_id)):
+            return {
+                "error": f"SSH daemon socket is already in use: {profile_id}",
+                "profile": profile_id,
+            }
+        try:
+            socket_path(profile_id).unlink()
+        except FileNotFoundError:
+            pass
+        ready = ready_path(profile_id)
+        try:
+            ready.unlink()
+        except FileNotFoundError:
+            pass
+        token = uuid.uuid4().hex
+        resolved_idle_timeout = configured_idle_timeout(idle_timeout)
+        command = [
+            sys.executable, str(SCRIPT), "daemon", "--profile-id", profile_id,
+            "--ready-file", str(ready),
+            "--timeout", str(timeout),
+            "--idle-timeout", str(resolved_idle_timeout),
+            "--token", token,
+        ]
+        log = log_path(profile_id).open("ab")
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+            )
+        finally:
+            log.close()
+        deadline = time.time() + daemon_ready_timeout(profile_id, timeout)
+        ready_payload: dict[str, Any] | None = None
+        while time.time() < deadline:
+            if ready.exists():
+                candidate = read_json(ready, {})
+                if isinstance(candidate, dict) and candidate.get("token") == token:
+                    ready_payload = candidate
+                    if candidate.get("ok") is not None:
+                        break
+            if process.poll() is not None:
+                break
+            time.sleep(0.1)
+        if not ready_payload:
+            ready_payload = {"ok": False, "error": "SSH daemon did not become ready"}
+        if not ready_payload.get("ok"):
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+            if runtime_owned(profile_id, token):
+                for path in (socket_path(profile_id), pid_path(profile_id), ready):
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
+            return {"error": ready_payload.get("error", "failed to open SSH connection")}
+        return {
+            "started": True,
+            "profile": profile_id,
+            "idle_timeout": resolved_idle_timeout,
+        }
 
 
 def ensure_daemon(profile_id: str, timeout: int = DEFAULT_TIMEOUT) -> None:
@@ -1557,7 +1889,7 @@ def run_open(args: argparse.Namespace) -> int:
         config["aliases"][args.alias] = profile_id
         save_config(config)
         profile_aliases = aliases_for(config, profile_id)
-    result = start_daemon(profile_id, args.timeout)
+    result = start_daemon(profile_id, args.timeout, args.idle_timeout)
     if result.get("error"):
         print_json(result)
         return 1
@@ -1641,17 +1973,59 @@ def run_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def wait_for_daemon_exit(profile_id: str, deadline: float) -> set[int]:
+    while time.monotonic() < deadline:
+        remaining = daemon_process_pids(profile_id)
+        if not remaining:
+            return set()
+        time.sleep(0.05)
+    return daemon_process_pids(profile_id)
+
+
+def terminate_daemon_processes(profile_id: str, pids: set[int], signal_number: int) -> None:
+    for pid in pids:
+        if pid <= 1 or pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, signal_number)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def close_profile(profile_id: str) -> dict[str, Any]:
-    if not daemon_running(profile_id):
+    daemon_pids = daemon_process_pids(profile_id)
+    if not daemon_pids and not socket_accepting(socket_path(profile_id)):
+        reap_stale()
         return {"profile": profile_id, "closed": False}
+    request_error = ""
     try:
-        result = request(profile_id, {"action": "close"}, timeout=2)
-        deadline = time.monotonic() + 3
-        while pid_alive(profile_id) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        return result
+        if socket_path(profile_id).exists():
+            result = request(profile_id, {"action": "close"}, timeout=2)
+            if result.get("error"):
+                request_error = str(result["error"])
+            else:
+                daemon_pids -= {os.getpid()}
+        else:
+            result = {"profile": profile_id, "closed": True}
     except Exception as exc:
-        return {"profile": profile_id, "error": str(exc)}
+        result = {"profile": profile_id}
+        request_error = str(exc)
+
+    remaining = wait_for_daemon_exit(profile_id, time.monotonic() + 3)
+    if remaining:
+        terminate_daemon_processes(profile_id, remaining, signal.SIGTERM)
+        remaining = wait_for_daemon_exit(profile_id, time.monotonic() + 2)
+    if remaining:
+        terminate_daemon_processes(profile_id, remaining, signal.SIGKILL)
+        remaining = wait_for_daemon_exit(profile_id, time.monotonic() + 1)
+    if remaining:
+        return {
+            "profile": profile_id,
+            "error": f"SSH daemon did not exit: {sorted(remaining)}",
+        }
+    if request_error:
+        return {"profile": profile_id, "error": request_error}
+    return {**result, "profile": profile_id, "closed": True}
 
 
 def run_close(args: argparse.Namespace) -> int:
@@ -1667,8 +2041,9 @@ def run_close(args: argparse.Namespace) -> int:
         profile_ids = [profile_id]
     else:
         raise ValueError("close needs an alias or --all")
-    print_json({"connections": [close_profile(profile_id) for profile_id in profile_ids]})
-    return 0
+    results = [close_profile(profile_id) for profile_id in profile_ids]
+    print_json({"connections": results})
+    return 1 if any(result.get("error") for result in results) else 0
 
 
 def run_forget(args: argparse.Namespace) -> int:
@@ -2184,6 +2559,12 @@ def build_parser() -> argparse.ArgumentParser:
     open_parser.add_argument("--password", dest="password_option")
     open_parser.add_argument("--jump", action="append", default=[], metavar="ALIAS")
     open_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    open_parser.add_argument(
+        "--idle-timeout",
+        type=int,
+        default=None,
+        help=f"daemon 空闲自动关闭秒数，默认 {DEFAULT_IDLE_TIMEOUT}；0 表示不自动关闭",
+    )
     open_parser.set_defaults(func=run_open)
 
     status_parser = subparsers.add_parser("status")
@@ -2341,6 +2722,8 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_parser.add_argument("--profile-id", required=True)
     daemon_parser.add_argument("--ready-file", required=True)
     daemon_parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    daemon_parser.add_argument("--idle-timeout", type=int, default=None)
+    daemon_parser.add_argument("--token", default="")
     daemon_parser.set_defaults(func=run_daemon)
     return parser
 

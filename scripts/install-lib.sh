@@ -1,10 +1,23 @@
 #!/bin/sh
 
 python_bin=${PYTHON_BIN:-python3}
-data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
-bin_home=${XDG_BIN_HOME:-"$HOME/.local/bin"}
-runtime_home="$data_home/agent-ops"
-server_ops_home=${LYSTAR_SERVER_OPS_HOME:-"$HOME/lystar-server-list"}
+lystar_home=${LYSTAR_HOME:-"$HOME/.lystar"}
+legacy_data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
+legacy_config_home=${XDG_CONFIG_HOME:-"$HOME/.config"}
+legacy_state_home=${XDG_STATE_HOME:-"$HOME/.local/state"}
+legacy_bin_home=${XDG_BIN_HOME:-"$HOME/.local/bin"}
+runtime_home="$lystar_home/runtime"
+config_home="$lystar_home/config"
+state_home="$lystar_home/state"
+bin_home="$lystar_home/bin"
+server_ops_home=${LYSTAR_SERVER_HOME:-"$lystar_home/servers"}
+old_server_home=${LYSTAR_SERVER_OPS_HOME:-"$HOME/lystar-server-list"}
+server_home_explicit=0
+legacy_layout_detected=0
+if [ -d "$legacy_data_home/agent-ops" ] || [ -d "$legacy_config_home/agent-ops" ] || [ -d "$legacy_state_home/agent-ops" ]; then
+    legacy_layout_detected=1
+fi
+compat_bin_home=
 skill_homes=
 
 usage() {
@@ -13,7 +26,7 @@ usage() {
 
   --harness <auto|all|opencode|codex|claude|pi>[,...]
   --skills-home <目录>    安装到自定义 Agent Skills 目录，可重复
-  --server-home <目录>    lystar-ssh-ops 的服务器资料目录
+  --server-home <目录>    兼容入口：使用指定服务器资料目录
   -h, --help              显示帮助
 EOF
 }
@@ -110,6 +123,7 @@ $2"
             --server-home)
                 [ "$#" -ge 2 ] || { echo "安装失败：--server-home 缺少参数。" >&2; exit 2; }
                 server_ops_home=$2
+                server_home_explicit=1
                 shift 2
                 ;;
             -h|--help)
@@ -146,6 +160,19 @@ $SKILLS_HOME"
         echo "安装失败：没有探测到支持的 Harness。请用 --harness 指定，或用 --skills-home 提供目录。" >&2
         exit 1
     fi
+
+    if [ "$legacy_layout_detected" = 1 ] && [ -d "$legacy_bin_home" ]; then
+        for command in dbx sshx hostx deployx backupx incidentx lystar-skill-update lystar-migrate; do
+            if [ -f "$legacy_bin_home/$command" ] && grep -Eq 'agent-ops|lystar' "$legacy_bin_home/$command"; then
+                compat_bin_home=$legacy_bin_home
+                break
+            fi
+        done
+    fi
+
+    if [ "$legacy_layout_detected" = 1 ] && [ "$lystar_home" != "$HOME/.lystar" ]; then
+        echo "  迁移旧目录到：$lystar_home" >&2
+    fi
 }
 
 require_python() {
@@ -157,6 +184,25 @@ require_python() {
         echo "安装失败：$python_bin 缺少 pip。" >&2
         exit 1
     fi
+    migrate_legacy_layout
+}
+
+migrate_legacy_layout() {
+    [ "$legacy_layout_detected" = 1 ] || return 0
+    set -- "$python_bin" "$root/runtime/agent-ops/scripts/migrate.py" \
+        --target-home "$lystar_home" \
+        --old-data "$legacy_data_home" \
+        --old-config "$legacy_config_home" \
+        --old-state "$legacy_state_home"
+    if [ "$server_home_explicit" = 1 ]; then
+        set -- "$@" --server-home "$server_ops_home"
+        if [ -d "$old_server_home" ] && [ "$old_server_home" != "$server_ops_home" ]; then
+            set -- "$@" --old-server "$old_server_home"
+        fi
+    elif [ -d "$old_server_home" ]; then
+        set -- "$@" --old-server "$old_server_home"
+    fi
+    "$@" >/dev/null
 }
 
 install_python_dependencies() {
@@ -167,6 +213,7 @@ install_python_dependencies() {
 
 install_runtime_scripts() {
     mkdir -p "$runtime_home/scripts"
+    install -m 0644 "$root/runtime/agent-ops/scripts/paths.py" "$runtime_home/scripts/paths.py"
     for script in "$@"; do
         install -m 0644 "$root/runtime/agent-ops/scripts/$script" "$runtime_home/scripts/$script"
     done
@@ -180,12 +227,29 @@ install_runtime_tests() {
 install_command() {
     mkdir -p "$bin_home"
     install -m 0755 "$root/bin/$1" "$bin_home/$1"
+    install -m 0644 "$root/bin/_lystar-paths.sh" "$bin_home/_lystar-paths.sh"
+    if [ -n "$compat_bin_home" ] && [ "$compat_bin_home" != "$bin_home" ] && [ -f "$compat_bin_home/$1" ] &&
+        grep -Eq 'agent-ops|lystar' "$compat_bin_home/$1"; then
+        install -m 0755 "$root/bin/$1" "$compat_bin_home/$1"
+        install -m 0644 "$root/bin/_lystar-paths.sh" "$compat_bin_home/_lystar-paths.sh"
+    fi
 }
 
 install_update_tool() {
     mkdir -p "$runtime_home/scripts" "$bin_home"
     install -m 0644 "$root/scripts/skill-update.py" "$runtime_home/scripts/skill_update.py"
+    install -m 0644 "$root/runtime/agent-ops/scripts/migrate.py" "$runtime_home/scripts/migrate.py"
     install -m 0755 "$root/bin/lystar-skill-update" "$bin_home/lystar-skill-update"
+    install -m 0755 "$root/bin/lystar-migrate" "$bin_home/lystar-migrate"
+    install -m 0644 "$root/bin/_lystar-paths.sh" "$bin_home/_lystar-paths.sh"
+    if [ -n "$compat_bin_home" ] && [ "$compat_bin_home" != "$bin_home" ]; then
+        for command in lystar-skill-update lystar-migrate; do
+            if [ -f "$compat_bin_home/$command" ] && grep -Eq 'agent-ops|lystar' "$compat_bin_home/$command"; then
+                install -m 0755 "$root/bin/$command" "$compat_bin_home/$command"
+                install -m 0644 "$root/bin/_lystar-paths.sh" "$compat_bin_home/_lystar-paths.sh"
+            fi
+        done
+    fi
 }
 
 for_each_skill_home() {
@@ -239,32 +303,32 @@ install_if_missing() {
     fi
 }
 
-link_server_data_at() {
-    skills_home=$1
-    destination="$skills_home/lystar-ssh-ops/servers"
-    mkdir -p "$skills_home/lystar-ssh-ops"
-    if [ -L "$destination" ]; then
-        [ "$(readlink "$destination")" = "$server_ops_home" ] && return
-        echo "安装失败：$destination 已指向其他目录。" >&2
-        exit 1
-    fi
-    if [ -e "$destination" ]; then
-        echo "安装失败：$destination 已存在，无法链接服务器资料目录。" >&2
-        exit 1
-    fi
-    ln -s "$server_ops_home" "$destination"
-}
-
 install_server_data() {
     old_umask=$(umask)
     umask 077
     mkdir -p "$server_ops_home/_templates"
-    server_ops_home=$(CDPATH= cd -- "$server_ops_home" && pwd)
     install_if_missing "$root/templates/server-list/README.md" "$server_ops_home/README.md"
     install_if_missing "$root/templates/server-list/_templates/server.md" "$server_ops_home/_templates/server.md"
+    install_if_missing "$root/templates/server-list/_templates/service.md" "$server_ops_home/_templates/service.md"
     install_if_missing "$root/templates/server-list/_templates/topic.md" "$server_ops_home/_templates/topic.md"
     umask "$old_umask"
-    for_each_skill_home link_server_data_at
+}
+
+remove_legacy_server_link_at() {
+    skills_home=$1
+    destination="$skills_home/lystar-ssh-ops/servers"
+    [ -L "$destination" ] || return 0
+    destination_real=$(CDPATH= cd -- "$destination" 2>/dev/null && pwd -P) || destination_real=
+    server_real=$(CDPATH= cd -- "$server_ops_home" 2>/dev/null && pwd -P) || server_real=
+    if [ -n "$destination_real" ] && [ -n "$server_real" ] && [ "$destination_real" = "$server_real" ]; then
+        unlink "$destination"
+    else
+        echo "  提示：保留旧服务器资料链接 $destination；请确认资料已迁移到 $server_ops_home 后手工删除。" >&2
+    fi
+}
+
+remove_legacy_server_links() {
+    for_each_skill_home remove_legacy_server_link_at
 }
 
 record_skill_installation() {
@@ -274,7 +338,10 @@ record_skill_installation() {
         --asset "$skill_name.zip" \
         --version-file "$root/VERSION" \
         --skill-homes "$skill_homes" \
-        --data-home "$data_home" \
+        --lystar-home "$lystar_home" \
+        --runtime-home "$runtime_home" \
+        --config-home "$config_home" \
+        --state-home "$state_home" \
         --bin-home "$bin_home" \
         --python-bin "$python_bin"
     if [ -n "$include_server_home" ]; then
