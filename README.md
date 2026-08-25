@@ -25,49 +25,57 @@ Windows 建议在 WSL 中使用。
 
 ## 快速安装
 
+普通用户和 Agent 应优先使用 GitHub Release 安装包，不需要 clone 或 pull 源码仓库。
+
 ### 安装全部 Skill
+
+```bash
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+curl -fsSL --retry 3 \
+  -o "$tmp_dir/lystar-devops-toolkit-skills.zip" \
+  https://github.com/lystar-team/lystar-devops-toolkit-skills/releases/latest/download/lystar-devops-toolkit-skills.zip
+unzip -q "$tmp_dir/lystar-devops-toolkit-skills.zip" -d "$tmp_dir/package"
+"$tmp_dir/package/install.sh" --harness auto
+```
+
+### 单独安装一个 Skill
+
+```bash
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+curl -fsSL --retry 3 \
+  -o "$tmp_dir/lystar-ssh-ops.zip" \
+  https://github.com/lystar-team/lystar-devops-toolkit-skills/releases/latest/download/lystar-ssh-ops.zip
+unzip -q "$tmp_dir/lystar-ssh-ops.zip" -d "$tmp_dir/package"
+"$tmp_dir/package/install.sh" --harness codex
+```
+
+将上例中的 `lystar-ssh-ops` 替换为 `lystar-db-ops`、`lystar-host-ops`、`lystar-deploy-ops`、`lystar-backup-ops` 或 `lystar-incident-ops`，即可安装对应的独立 Skill；按目标 Harness 修改 `--harness` 参数。
+
+### 从源码安装（仅开发者和仓库维护者）
+
+只有需要修改 Skill、构建安装包或验证未发布代码时才从源码安装：
 
 ```bash
 git clone https://github.com/lystar-team/lystar-devops-toolkit-skills.git
 cd lystar-devops-toolkit-skills
-./install.sh
-```
-
-### 单独安装
-
-```bash
-./install-lystar-ssh-ops.sh
-./install-lystar-db-ops.sh
-./install-lystar-host-ops.sh
-./install-lystar-deploy-ops.sh
-./install-lystar-backup-ops.sh
-./install-lystar-incident-ops.sh
+./install.sh --harness auto
 ```
 
 ## 给 Agent 的直接安装指令
 
-下面两组命令可以直接交给 Agent 执行，不需要让 Agent 自己猜安装器、目录或 Skill 名称：
+下面两组提示词可以直接交给 Agent 执行。它们默认使用 GitHub Release，不要求 Agent 访问或拉取源码仓库：
 
 ```text
-请在当前仓库执行 ./install.sh --harness auto，安装全部六个 LYStar Skill，并在完成后验证 $HOME/.lystar/bin、$HOME/.lystar/config、$HOME/.lystar/state 和 $HOME/.lystar/servers。
+请从 GitHub Release 最新版本下载 https://github.com/lystar-team/lystar-devops-toolkit-skills/releases/latest/download/lystar-devops-toolkit-skills.zip，使用临时目录解压，并执行安装包根目录中的 ./install.sh --harness auto，安装全部六个 LYStar Skill。不要 clone、pull 或要求我提供源码仓库。完成后验证 $HOME/.lystar/bin、$HOME/.lystar/config、$HOME/.lystar/state 和 $HOME/.lystar/servers/README.md。
 ```
 
 ```text
-请在当前仓库执行 ./install-lystar-ssh-ops.sh --harness codex，固定安装 lystar-ssh-ops；如果目标 Harness 不是 Codex，把 codex 替换为 opencode、claude 或 pi。完成后验证 sshx --help 和 $HOME/.lystar/servers/README.md。
+请从 GitHub Release 最新版本下载 https://github.com/lystar-team/lystar-devops-toolkit-skills/releases/latest/download/lystar-ssh-ops.zip，使用临时目录解压，并执行安装包根目录中的 ./install.sh --harness codex，固定安装 lystar-ssh-ops。不要 clone、pull 或要求我提供源码仓库；如果目标 Harness 不是 Codex，把 codex 替换为 opencode、claude 或 pi。完成后验证 sshx --help 和 $HOME/.lystar/servers/README.md。
 ```
 
-固定 Skill 的安装脚本与名称必须一一对应：`install-lystar-db-ops.sh`、`install-lystar-host-ops.sh`、`install-lystar-deploy-ops.sh`、`install-lystar-backup-ops.sh`、`install-lystar-incident-ops.sh`。安装器不会把服务器资料软链接到 Harness 的 Skill 目录。
-
-也可以从 GitHub Release 下载独立包：
-
-```bash
-curl -fLO https://github.com/lystar-team/lystar-devops-toolkit-skills/releases/latest/download/lystar-ssh-ops.zip
-unzip lystar-ssh-ops.zip -d lystar-ssh-ops
-cd lystar-ssh-ops
-./install.sh
-```
-
-数据库包、主机包、部署包、备份包和事件包分别将文件名替换为 `lystar-db-ops.zip`、`lystar-host-ops.zip`、`lystar-deploy-ops.zip`、`lystar-backup-ops.zip`、`lystar-incident-ops.zip`。
+无论通过哪种方式安装，安装器都不会把服务器资料软链接到 Harness 的 Skill 目录。独立包文件名与 Skill 一一对应：`lystar-ssh-ops.zip`、`lystar-db-ops.zip`、`lystar-host-ops.zip`、`lystar-deploy-ops.zip`、`lystar-backup-ops.zip`、`lystar-incident-ops.zip`。
 
 ## Harness 探测与选择
 
