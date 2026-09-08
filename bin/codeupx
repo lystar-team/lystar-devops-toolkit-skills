@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+. "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/_lystar-paths.sh"
+export ALIBABA_CLOUD_CLI_PLUGINS_DIR="${ALIBABA_CLOUD_CLI_PLUGINS_DIR:-$LYSTAR_RUNTIME_HOME/aliyun/plugins}"
+if [ "${LYSTAR_SKILL_AUTO_UPDATE:-1}" != "0" ] && [ -z "${LYSTAR_SKILL_UPDATE:-}" ] && [ -f "$LYSTAR_RUNTIME_HOME/scripts/skill_update.py" ]; then
+    "${PYTHON_BIN:-python3}" "$LYSTAR_RUNTIME_HOME/scripts/skill_update.py" auto lystar-codeup-devops --quiet >/dev/null 2>&1 || true
+fi
+PYTHONPATH="$LYSTAR_RUNTIME_HOME/vendor${PYTHONPATH:+:$PYTHONPATH}" \
+    exec "${PYTHON_BIN:-python3}" "$LYSTAR_RUNTIME_HOME/scripts/codeup_devops.py" "$@"

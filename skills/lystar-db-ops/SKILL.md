@@ -44,9 +44,12 @@ dbx source remove <别名|profile> [--confirm] [--json]
 ```bash
 dbx query "<只读SQL>"
 dbx query --source <数据源> "<只读SQL>"
+dbx query --source <管理员数据源> --database <目标库> --json "<只读SQL>"
 dbx query --json "<需要脚本解析或严格类型的只读SQL>"
 dbx exec "<DDL或DML>" [--transaction commit|rollback]
+dbx exec --source <管理员数据源> --database <目标库> "<DDL或DML>"
 dbx import <SQL文件> [--transaction commit|rollback]
+dbx import --source <管理员数据源> --database <目标库> <SQL文件>
 dbx export <输出文件>
 dbx last [--summary|--json|--clear]
 ```
@@ -61,5 +64,6 @@ dbx last [--summary|--json|--clear]
 - 用户问上次结果时，当前上下文有完整结果就直接使用；缺少细节时调用 `last --summary`，确需正文再调用 `last`。
 - `query` 用于只读查询，默认返回 20 行；需要精确总数时单独执行 `COUNT(*)`。
 - `exec`、`import` 和数据库写入必须来自用户明确要求；执行后使用 `query` 回查。
+- `--database` 只覆盖当前命令的连接目标，不修改已保存 profile；适合管理员连接创建或初始化指定项目库。
 - 删除、批量更新、资金、权限和历史数据修正先说明影响与回滚方式，再执行。
 - 结果区分只读查询、SQL 编写、SQL 审查和已实际执行，未执行不能宣称已落库。

@@ -62,9 +62,9 @@ harness_installed() {
 harness_skill_home() {
     case "$1" in
         opencode) printf '%s\n' "${OPENCODE_CONFIG_DIR:-"$HOME/.config/opencode"}/skills" ;;
-        codex) printf '%s\n' "${CODEX_HOME:-"$HOME/.codex"}/skills" ;;
+        codex) printf '%s\n' "${AGENTS_SKILLS_HOME:-"$HOME/.agents/skills"}" ;;
         claude) printf '%s\n' "${CLAUDE_CONFIG_DIR:-"$HOME/.claude"}/skills" ;;
-        pi) printf '%s\n' "${PI_CODING_AGENT_DIR:-"$HOME/.pi/agent"}/skills" ;;
+        pi) printf '%s\n' "${AGENTS_SKILLS_HOME:-"$HOME/.agents/skills"}" ;;
     esac
 }
 
@@ -162,7 +162,7 @@ $SKILLS_HOME"
     fi
 
     if [ "$legacy_layout_detected" = 1 ] && [ -d "$legacy_bin_home" ]; then
-        for command in dbx sshx hostx deployx backupx incidentx lystar-skill-update lystar-migrate; do
+        for command in dbx sshx hostx deployx backupx incidentx codeupx redisx magicx lystar-skill-update lystar-migrate; do
             if [ -f "$legacy_bin_home/$command" ] && grep -Eq 'agent-ops|lystar' "$legacy_bin_home/$command"; then
                 compat_bin_home=$legacy_bin_home
                 break
@@ -235,6 +235,18 @@ install_command() {
     fi
 }
 
+install_codeup_cli_plugin() {
+    aliyun_bin="$bin_home/aliyun"
+    if [ ! -x "$aliyun_bin" ]; then
+        aliyun_bin=$(command -v aliyun 2>/dev/null || true)
+    fi
+    [ -x "$aliyun_bin" ] || return 0
+    export ALIBABA_CLOUD_CLI_PLUGINS_DIR="${ALIBABA_CLOUD_CLI_PLUGINS_DIR:-$runtime_home/aliyun/plugins}"
+    mkdir -p "$ALIBABA_CLOUD_CLI_PLUGINS_DIR"
+    "$aliyun_bin" plugin install --names aliyun-cli-devops >/dev/null 2>&1 ||
+        echo "  提示：云效 CLI 插件安装失败，请稍后执行 aliyun plugin install --names aliyun-cli-devops。" >&2
+}
+
 install_update_tool() {
     mkdir -p "$runtime_home/scripts" "$bin_home"
     install -m 0644 "$root/scripts/skill-update.py" "$runtime_home/scripts/skill_update.py"
@@ -269,6 +281,12 @@ install_regular_skill_at() {
     skill_name=$2
     mkdir -p "$skills_home/$skill_name"
     install -m 0644 "$root/skills/$skill_name/SKILL.md" "$skills_home/$skill_name/SKILL.md"
+    for extra_dir in references examples; do
+        if [ -d "$root/skills/$skill_name/$extra_dir" ]; then
+            mkdir -p "$skills_home/$skill_name/$extra_dir"
+            cp -R "$root/skills/$skill_name/$extra_dir/." "$skills_home/$skill_name/$extra_dir/"
+        fi
+    done
     install -m 0644 "$root/VERSION" "$skills_home/$skill_name/VERSION"
 }
 

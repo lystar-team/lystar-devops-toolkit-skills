@@ -1,6 +1,6 @@
 # LYStar DevOps Toolkit Skills
 
-给 AI coding agent 使用的运维 Skill 集合。目前包含六个可独立安装的 Skill：
+给 AI coding agent 使用的运维 Skill 集合。目前包含九个可独立安装的 Skill：
 
 | Skill | 命令 | 能力 |
 | --- | --- | --- |
@@ -10,8 +10,11 @@
 | `lystar-deploy-ops` | `deployx` | 版本化或历史目录兼容部署、健康检查、状态、历史和回滚 |
 | `lystar-backup-ops` | `backupx` | 本地数据库/文件备份、校验、恢复、恢复验证和保留清理 |
 | `lystar-incident-ops` | `incidentx` | 只读事件证据、可校验诊断包和离线时间线 |
+| `lystar-codeup-devops` | `codeupx` | 云效组织上下文、流水线 YAML 创建、更新、运行和结果轮询 |
+| `lystar-redis-ops` | `redisx` | Redis 连通性、DB 索引扫描、空闲 DB 预留和验证 |
+| `lystar-magicapi-ops` | `magicx` | Magic-API WebIDE 资源管理、接口执行、多环境 Profile 和登录态管理 |
 
-支持 OpenCode、OpenAI Codex、Claude Code、Pi，以及其它兼容 Agent Skills `SKILL.md` 结构的 Harness。六个命令共用本地安装和更新机制，但 Skill 可以单独安装、单独更新。
+支持 OpenCode、OpenAI Codex、Claude Code、Pi，以及其它兼容 Agent Skills `SKILL.md` 结构的 Harness。九个公开命令共用本地安装和更新机制，但 Skill 可以单独安装、单独更新。Yean 的其他自用能力不在本仓库和公开安装包中。
 
 ## 环境要求
 
@@ -51,7 +54,7 @@ unzip -q "$tmp_dir/lystar-ssh-ops.zip" -d "$tmp_dir/package"
 "$tmp_dir/package/install.sh" --harness codex
 ```
 
-将上例中的 `lystar-ssh-ops` 替换为 `lystar-db-ops`、`lystar-host-ops`、`lystar-deploy-ops`、`lystar-backup-ops` 或 `lystar-incident-ops`，即可安装对应的独立 Skill；按目标 Harness 修改 `--harness` 参数。
+将上例中的 `lystar-ssh-ops` 替换为 `lystar-db-ops`、`lystar-host-ops`、`lystar-deploy-ops`、`lystar-backup-ops`、`lystar-incident-ops`、`lystar-codeup-devops`、`lystar-redis-ops` 或 `lystar-magicapi-ops`，即可安装对应的公开独立 Skill；按目标 Harness 修改 `--harness` 参数。
 
 ### 从源码安装（仅开发者和仓库维护者）
 
@@ -68,14 +71,14 @@ cd lystar-devops-toolkit-skills
 下面两组提示词可以直接交给 Agent 执行。它们默认使用 GitHub Release，不要求 Agent 访问或拉取源码仓库：
 
 ```text
-请从 GitHub Release 最新版本下载 https://github.com/lystar-team/lystar-devops-toolkit-skills/releases/latest/download/lystar-devops-toolkit-skills.zip，使用临时目录解压，并执行安装包根目录中的 ./install.sh --harness auto，安装全部六个 LYStar Skill。不要 clone、pull 或要求我提供源码仓库。完成后验证 $HOME/.lystar/bin、$HOME/.lystar/config、$HOME/.lystar/state 和 $HOME/.lystar/servers/README.md。
+请从 GitHub Release 最新版本下载 https://github.com/lystar-team/lystar-devops-toolkit-skills/releases/latest/download/lystar-devops-toolkit-skills.zip，使用临时目录解压，并执行安装包根目录中的 ./install.sh --harness auto，安装全部九个 LYStar Skill。不要 clone、pull 或要求我提供源码仓库。完成后验证 $HOME/.lystar/bin、$HOME/.lystar/config、$HOME/.lystar/state 和 $HOME/.lystar/servers/README.md。
 ```
 
 ```text
 请从 GitHub Release 最新版本下载 https://github.com/lystar-team/lystar-devops-toolkit-skills/releases/latest/download/lystar-ssh-ops.zip，使用临时目录解压，并执行安装包根目录中的 ./install.sh --harness codex，固定安装 lystar-ssh-ops。不要 clone、pull 或要求我提供源码仓库；如果目标 Harness 不是 Codex，把 codex 替换为 opencode、claude 或 pi。完成后验证 sshx --help 和 $HOME/.lystar/servers/README.md。
 ```
 
-无论通过哪种方式安装，安装器都不会把服务器资料软链接到 Harness 的 Skill 目录。独立包文件名与 Skill 一一对应：`lystar-ssh-ops.zip`、`lystar-db-ops.zip`、`lystar-host-ops.zip`、`lystar-deploy-ops.zip`、`lystar-backup-ops.zip`、`lystar-incident-ops.zip`。
+无论通过哪种方式安装，安装器都不会把服务器资料软链接到 Harness 的 Skill 目录。公开独立包文件名与 Skill 一一对应：`lystar-ssh-ops.zip`、`lystar-db-ops.zip`、`lystar-host-ops.zip`、`lystar-deploy-ops.zip`、`lystar-backup-ops.zip`、`lystar-incident-ops.zip`、`lystar-codeup-devops.zip`、`lystar-redis-ops.zip`、`lystar-magicapi-ops.zip`。
 
 ## Harness 探测与选择
 
@@ -84,9 +87,11 @@ cd lystar-devops-toolkit-skills
 | Harness | 探测依据 | 默认 Skill 目录 |
 | --- | --- | --- |
 | OpenCode | `opencode` 或 `~/.config/opencode` | `~/.config/opencode/skills` |
-| OpenAI Codex | `codex` 或 `${CODEX_HOME:-~/.codex}` | `${CODEX_HOME:-~/.codex}/skills` |
+| OpenAI Codex | `codex` 或 `${CODEX_HOME:-~/.codex}` | `${AGENTS_SKILLS_HOME:-~/.agents/skills}` |
 | Claude Code | `claude` 或 `${CLAUDE_CONFIG_DIR:-~/.claude}` | `${CLAUDE_CONFIG_DIR:-~/.claude}/skills` |
-| Pi | `pi` 或 `${PI_CODING_AGENT_DIR:-~/.pi/agent}` | `${PI_CODING_AGENT_DIR:-~/.pi/agent}/skills` |
+| Pi | `pi` 或 `${PI_CODING_AGENT_DIR:-~/.pi/agent}` | `${AGENTS_SKILLS_HOME:-~/.agents/skills}` |
+
+Codex 与 Pi 原生发现 `~/.agents/skills`。同时选择两者时只安装一份，避免 Harness 目录产生重复副本。
 
 只安装到一个 Harness：
 
@@ -121,7 +126,7 @@ cd lystar-devops-toolkit-skills
 
 默认固定根目录是 `$HOME/.lystar`：
 
-- 命令：`$HOME/.lystar/bin/` 下的 `dbx`、`sshx`、`hostx`、`deployx`、`backupx`、`incidentx`、`lystar-skill-update`、`lystar-migrate`
+- 命令：`$HOME/.lystar/bin/` 下的 `dbx`、`sshx`、`hostx`、`deployx`、`backupx`、`incidentx`、`codeupx`、`redisx`、`magicx`、`lystar-skill-update`、`lystar-migrate`
 - 运行时：`$HOME/.lystar/runtime/`
 - 配置：`$HOME/.lystar/config/`
 - 状态与结果：`$HOME/.lystar/state/`
@@ -150,13 +155,13 @@ lystar-migrate --server-link /绝对路径/服务器资料 Git 仓库
 
 ## 自动更新
 
-`dbx`、`sshx`、`hostx`、`deployx`、`backupx` 和 `incidentx` 启动时会调用各自 Skill 的更新检查：
+- `dbx`、`sshx`、`hostx`、`deployx`、`backupx`、`incidentx`、`codeupx`、`redisx` 和 `magicx` 启动时会调用各自 Skill 的更新检查：
 
 1. 每个 Skill 最多每 24 小时请求一次 GitHub Latest Release。
 2. 发现更高的语义版本后，下载对应独立 ZIP。
 3. 下载并校验 Release 中的 `SHA256SUMS`。
 4. 使用首次安装时记录的 Skill 目录和 `$HOME/.lystar` 子目录重新安装。
-5. 检查或更新失败不会阻断当前 `dbx`、`sshx`、`hostx`、`deployx`、`backupx`、`incidentx` 命令。
+5. 检查或更新失败不会阻断当前 `dbx`、`sshx`、`hostx`、`deployx`、`backupx`、`incidentx`、`codeupx`、`redisx`、`magicx` 命令。
 
 手工检查：
 
@@ -178,6 +183,7 @@ lystar-skill-update check lystar-host-ops
 ```bash
 LYSTAR_SKILL_AUTO_UPDATE=0 sshx status
 LYSTAR_SKILL_AUTO_UPDATE=0 dbx sources
+LYSTAR_SKILL_AUTO_UPDATE=0 magicx profile list
 LYSTAR_SKILL_AUTO_UPDATE=0 hostx facts prod
 LYSTAR_SKILL_AUTO_UPDATE=0 deployx status prod --app web --release-root /srv/apps
 LYSTAR_SKILL_AUTO_UPDATE=0 backupx list --repository ./backups
@@ -185,6 +191,23 @@ LYSTAR_SKILL_AUTO_UPDATE=0 incidentx show ./incident-bundles/case-20260823
 ```
 
 自动更新依赖 GitHub Release。源码分支上的未发布提交不会自动进入用户环境。
+
+## Magic-API 使用
+
+`lystar-magicapi-ops` 通过 `magicx` 直接访问 Magic-API WebIDE 和运行接口，不依赖页面编辑器：
+
+```bash
+magicx profile add prod-cron \
+  --base-url 'http://example.com:31289' \
+  --username yean \
+  --password-stdin
+magicx login prod-cron
+magicx resource list prod-cron
+magicx resource get prod-cron --path /yean/queryPortraitMissing202607
+magicx run prod-cron --path /yean/queryPortraitMissing202607
+```
+
+Profile、密码、Cookie、`magic-token` 和业务请求头保存在 `$HOME/.lystar`，不写入仓库。资源保存和 POST、PUT、DELETE 接口执行需要 `--confirm`。
 
 ## SSH 使用
 
@@ -401,8 +424,8 @@ lystar-migrate --server-link /absolute/path/to/your-server-list
 
 ```text
 .
-├── skills/                    # 六个 Skill 源文件
-├── runtime/agent-ops/         # 六个命令的 Python 运行时与测试
+├── skills/                    # 九个 Skill 源文件
+├── runtime/agent-ops/         # 九个命令的 Python 运行时与测试
 ├── bin/                       # 用户命令入口与统一路径脚本
 ├── templates/server-list/     # 空服务器资料模板
 ├── requirements/              # 全量和独立 Skill 依赖
@@ -417,6 +440,9 @@ lystar-migrate --server-link /absolute/path/to/your-server-list
 ├── install-lystar-deploy-ops.sh
 ├── install-lystar-backup-ops.sh
 ├── install-lystar-incident-ops.sh
+├── install-lystar-codeup-devops.sh
+├── install-lystar-redis-ops.sh
+├── install-lystar-magicapi-ops.sh
 └── AGENTS.md                  # 给 Agent 的仓库级执行提示
 ```
 
@@ -434,6 +460,9 @@ lystar-migrate --server-link /absolute/path/to/your-server-list
 - `dist/lystar-deploy-ops.zip`
 - `dist/lystar-backup-ops.zip`
 - `dist/lystar-incident-ops.zip`
+- `dist/lystar-codeup-devops.zip`
+- `dist/lystar-redis-ops.zip`
+- `dist/lystar-magicapi-ops.zip`
 - `dist/lystar-devops-toolkit-skills.zip`
 - `dist/SHA256SUMS`
 

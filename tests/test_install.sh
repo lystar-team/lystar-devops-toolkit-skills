@@ -62,27 +62,25 @@ XDG_STATE_HOME="$auto/state" \
 XDG_BIN_HOME="$auto/bin" \
 PYTHON_BIN="$fake_python" \
     sh "$root/install.sh" >/dev/null
-for command in dbx sshx hostx deployx backupx incidentx lystar-skill-update lystar-migrate; do
+for command in dbx sshx hostx deployx backupx incidentx codeupx redisx magicx lystar-skill-update lystar-migrate; do
     test -x "$auto/home/.lystar/bin/$command"
 done
 test ! -e "$auto/bin/dbx"
-assert_skill "$auto/home/.codex/skills" lystar-db-ops
-assert_skill "$auto/home/.codex/skills" lystar-ssh-ops
-assert_skill "$auto/home/.codex/skills" lystar-host-ops
-assert_skill "$auto/home/.codex/skills" lystar-deploy-ops
-assert_skill "$auto/home/.codex/skills" lystar-backup-ops
-assert_skill "$auto/home/.codex/skills" lystar-incident-ops
-assert_skill "$auto/home/.pi/agent/skills" lystar-db-ops
-assert_skill "$auto/home/.pi/agent/skills" lystar-ssh-ops
-assert_skill "$auto/home/.pi/agent/skills" lystar-host-ops
-assert_skill "$auto/home/.pi/agent/skills" lystar-deploy-ops
-assert_skill "$auto/home/.pi/agent/skills" lystar-backup-ops
-assert_skill "$auto/home/.pi/agent/skills" lystar-incident-ops
+assert_skill "$auto/home/.agents/skills" lystar-db-ops
+assert_skill "$auto/home/.agents/skills" lystar-ssh-ops
+assert_skill "$auto/home/.agents/skills" lystar-host-ops
+assert_skill "$auto/home/.agents/skills" lystar-deploy-ops
+assert_skill "$auto/home/.agents/skills" lystar-backup-ops
+assert_skill "$auto/home/.agents/skills" lystar-incident-ops
+assert_skill "$auto/home/.agents/skills" lystar-codeup-devops
+assert_skill "$auto/home/.agents/skills" lystar-redis-ops
+assert_skill "$auto/home/.agents/skills" lystar-magicapi-ops
 test ! -e "$auto/home/.claude/skills/lystar-db-ops"
 test ! -e "$auto/home/.config/opencode/skills/lystar-db-ops"
 assert_server_data "$auto/home/.lystar/servers"
-test ! -e "$auto/home/.codex/skills/lystar-ssh-ops/servers"
-test ! -e "$auto/home/.pi/agent/skills/lystar-ssh-ops/servers"
+test ! -e "$auto/home/.agents/skills/lystar-ssh-ops/servers"
+test ! -e "$auto/home/.codex/skills/lystar-ssh-ops"
+test ! -e "$auto/home/.pi/agent/skills/lystar-ssh-ops"
 
 # 显式单选不会受其它命令影响。
 single="$temp/single"
@@ -100,6 +98,46 @@ test ! -e "$single/home/.codex/skills/lystar-db-ops"
 test ! -e "$single/home/.pi/agent/skills/lystar-db-ops"
 test ! -e "$single/home/.config/opencode/skills/lystar-db-ops"
 
+# 新增的单独 Skill 使用相同 Lystar 根目录。
+codeup="$temp/codeup"
+HOME="$codeup/home" \
+PATH="/usr/bin:/bin" \
+XDG_DATA_HOME="$codeup/data" \
+XDG_STATE_HOME="$codeup/state" \
+XDG_BIN_HOME="$codeup/bin" \
+PYTHON_BIN="$fake_python" \
+    sh "$root/install-lystar-codeup-devops.sh" --harness pi >/dev/null
+assert_skill "$codeup/home/.agents/skills" lystar-codeup-devops
+test -x "$codeup/home/.lystar/bin/codeupx"
+test -f "$codeup/home/.lystar/runtime/scripts/codeup_devops.py"
+
+# Redis Skill shares the same Lystar root and installs its own command.
+redis="$temp/redis"
+HOME="$redis/home" \
+PATH="/usr/bin:/bin" \
+XDG_DATA_HOME="$redis/data" \
+XDG_STATE_HOME="$redis/state" \
+XDG_BIN_HOME="$redis/bin" \
+PYTHON_BIN="$fake_python" \
+    sh "$root/install-lystar-redis-ops.sh" --harness pi >/dev/null
+assert_skill "$redis/home/.agents/skills" lystar-redis-ops
+test -x "$redis/home/.lystar/bin/redisx"
+test -f "$redis/home/.lystar/runtime/scripts/redis_ops.py"
+
+# Magic-API Skill shares the same Lystar root and installs its own command.
+magicapi="$temp/magicapi"
+HOME="$magicapi/home" \
+PATH="/usr/bin:/bin" \
+XDG_DATA_HOME="$magicapi/data" \
+XDG_STATE_HOME="$magicapi/state" \
+XDG_BIN_HOME="$magicapi/bin" \
+PYTHON_BIN="$fake_python" \
+    sh "$root/install-lystar-magicapi-ops.sh" --harness pi >/dev/null
+assert_skill "$magicapi/home/.agents/skills" lystar-magicapi-ops
+test -x "$magicapi/home/.lystar/bin/magicx"
+test -f "$magicapi/home/.lystar/runtime/scripts/magicapi_ops.py"
+test -f "$magicapi/home/.agents/skills/lystar-magicapi-ops/references/magicapi-contract.md"
+
 # 显式多选与自定义服务器目录。
 multi="$temp/multi"
 server_home="$multi/private-servers"
@@ -110,7 +148,7 @@ XDG_STATE_HOME="$multi/state" \
 XDG_BIN_HOME="$multi/bin" \
 PYTHON_BIN="$fake_python" \
     sh "$root/install-lystar-ssh-ops.sh" --harness opencode,codex,pi --server-home "$server_home" >/dev/null
-for skills_home in "$multi/home/.config/opencode/skills" "$multi/home/.codex/skills" "$multi/home/.pi/agent/skills"; do
+for skills_home in "$multi/home/.config/opencode/skills" "$multi/home/.agents/skills"; do
     assert_skill "$skills_home" lystar-ssh-ops
     test ! -e "$skills_home/lystar-ssh-ops/servers"
 done
@@ -182,13 +220,13 @@ test -f "$migrated/home/.lystar/servers/README.md"
 test -f "$migrated/old-config/agent-ops/ssh.toml"
 test -f "$migrated/old-server/README.md"
 
-# 更新器记录了六个 Skill 和新布局。
+# 更新器记录了九个 Skill 和新布局。
 python3 - "$auto/home/.lystar/state/update/installed.json" <<'PY'
 import json
 import sys
 state = json.load(open(sys.argv[1], encoding="utf-8"))
-assert sorted(state["skills"]) == ["lystar-backup-ops", "lystar-db-ops", "lystar-deploy-ops", "lystar-host-ops", "lystar-incident-ops", "lystar-ssh-ops"]
-assert len(state["skills"]["lystar-db-ops"]["skill_homes"]) == 2
+assert sorted(state["skills"]) == ["lystar-backup-ops", "lystar-codeup-devops", "lystar-db-ops", "lystar-deploy-ops", "lystar-host-ops", "lystar-incident-ops", "lystar-magicapi-ops", "lystar-redis-ops", "lystar-ssh-ops"]
+assert len(state["skills"]["lystar-db-ops"]["skill_homes"]) == 1
 assert state["skills"]["lystar-ssh-ops"]["lystar_home"].endswith("/.lystar")
 assert state["skills"]["lystar-ssh-ops"]["server_home"].endswith("/.lystar/servers")
 PY

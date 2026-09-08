@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+. "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/_lystar-paths.sh"
+if [ "${LYSTAR_SKILL_AUTO_UPDATE:-1}" != "0" ] && [ -z "${LYSTAR_SKILL_UPDATE:-}" ] && [ -f "$LYSTAR_RUNTIME_HOME/scripts/skill_update.py" ]; then
+    "${PYTHON_BIN:-python3}" "$LYSTAR_RUNTIME_HOME/scripts/skill_update.py" auto lystar-magicapi-ops --quiet >/dev/null 2>&1 || true
+fi
+PYTHONPATH="$LYSTAR_RUNTIME_HOME/vendor${PYTHONPATH:+:$PYTHONPATH}" \
+    exec "${PYTHON_BIN:-python3}" "$LYSTAR_RUNTIME_HOME/scripts/magicapi_ops.py" "$@"

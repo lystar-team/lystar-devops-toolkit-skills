@@ -185,6 +185,11 @@ class DatabaseOutputTest(unittest.TestCase):
         self.assertTrue(parser.parse_args(["query", "SELECT 1", "--json"]).json)
         self.assertTrue(parser.parse_args(["last", "--json"]).json)
 
+    def test_database_override_is_available_for_connection_commands(self) -> None:
+        parser = db_ops.build_parser()
+        args = parser.parse_args(["query", "SELECT 1", "--source", "admin", "--database", "demo_platform_db"])
+        self.assertEqual(args.database, "demo_platform_db")
+
 
 class DatabaseRegistryTest(unittest.TestCase):
     def test_same_identity_reuses_profile(self) -> None:

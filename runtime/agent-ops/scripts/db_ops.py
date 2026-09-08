@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -436,7 +437,7 @@ def candidate_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def resolve_datasource(root: Path, requested: str) -> tuple[str, core.DataSource]:
+def resolve_datasource(root: Path, requested: str, database_override: str = "") -> tuple[str, core.DataSource]:
     rows, database_cfg, project_cfg = sync_discovered(root)
     profile_id = resolve_reference(requested, rows, database_cfg, project_cfg)
     if requested and not profile_id:
@@ -460,7 +461,12 @@ def resolve_datasource(root: Path, requested: str) -> tuple[str, core.DataSource
     profile = database_cfg["profiles"].get(profile_id)
     if not profile:
         raise ValueError(f"datasource profile no longer exists: {profile_id}")
-    return profile_id, datasource_from_profile(profile_id, profile)
+    datasource = datasource_from_profile(profile_id, profile)
+    if database_override:
+        if "\x00" in database_override:
+            raise ValueError("database override contains NUL")
+        datasource = replace(datasource, database=database_override)
+    return profile_id, datasource
 
 
 def handle_sources(args: argparse.Namespace) -> int:
@@ -718,17 +724,23 @@ def print_query_result(payload: dict[str, Any], as_json: bool) -> None:
 
 def operation_request(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "query":
-        return {"sql": args.sql, "limit": args.limit}
+        return {"sql": args.sql, "database": getattr(args, "database", ""), "limit": args.limit}
     if args.command == "exec":
-        return {"sql": args.sql, "transaction": getattr(args, "transaction", "commit")}
+        return {
+            "sql": args.sql,
+            "database": getattr(args, "database", ""),
+            "transaction": getattr(args, "transaction", "commit"),
+        }
     if args.command == "import":
         return {
             "sql_file": str(Path(args.sql_file).expanduser().resolve()),
+            "database": getattr(args, "database", ""),
             "transaction": getattr(args, "transaction", "commit"),
         }
     if args.command == "export":
         return {
             "out_file": str(Path(args.out_file).expanduser().resolve()),
+            "database": getattr(args, "database", ""),
             "tables": args.tables,
             "schema": args.schema,
             "schema_only": args.schema_only,
@@ -757,7 +769,7 @@ def save_operation_result(
 
 def handle_query(args: argparse.Namespace) -> int:
     root = canonical_root(args.root)
-    profile_id, datasource = resolve_datasource(root, args.source)
+    profile_id, datasource = resolve_datasource(root, args.source, args.database)
     core.enforce_query_read_only(args.sql, False)
     result = query_result(core.run_query(datasource, args.sql, args.limit), args.max_cell_chars)
     persist_probe(profile_id, result)
@@ -769,7 +781,7 @@ def handle_query(args: argparse.Namespace) -> int:
 
 def handle_exec(args: argparse.Namespace) -> int:
     root = canonical_root(args.root)
-    profile_id, datasource = resolve_datasource(root, args.source)
+    profile_id, datasource = resolve_datasource(root, args.source, args.database)
     result = core.run_non_query(datasource, args.sql, getattr(args, "transaction", "commit"))
     persist_probe(profile_id, result)
     result = datasource_result(profile_id, datasource, result)
@@ -780,7 +792,7 @@ def handle_exec(args: argparse.Namespace) -> int:
 
 def handle_import(args: argparse.Namespace) -> int:
     root = canonical_root(args.root)
-    profile_id, datasource = resolve_datasource(root, args.source)
+    profile_id, datasource = resolve_datasource(root, args.source, args.database)
     sql_file = Path(args.sql_file).expanduser().resolve()
     if not sql_file.is_file():
         raise FileNotFoundError(f"SQL file not found: {sql_file}")
@@ -798,7 +810,7 @@ def handle_import(args: argparse.Namespace) -> int:
 
 def handle_export(args: argparse.Namespace) -> int:
     root = canonical_root(args.root)
-    profile_id, datasource = resolve_datasource(root, args.source)
+    profile_id, datasource = resolve_datasource(root, args.source, args.database)
     export_args = SimpleNamespace(
         schema_only=args.schema_only,
         data_only=args.data_only,
@@ -836,6 +848,7 @@ def handle_last(args: argparse.Namespace) -> int:
 def add_project_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--root", default=str(Path.cwd()), help="Project root; defaults to current directory")
     parser.add_argument("--source", default="", help="Datasource alias, profile, or discovery source")
+    parser.add_argument("--database", default="", help="Override the selected datasource database without changing its profile")
 
 
 def build_parser() -> argparse.ArgumentParser:

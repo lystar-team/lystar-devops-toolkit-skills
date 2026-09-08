@@ -3,13 +3,13 @@
 ## 先确认事实源
 
 - 本仓库是 Skill 源码和安装器仓库，不保存用户服务器、SSH 密码、数据库密码、私钥、Token、Cookie 或运行结果。
-- 用户本地运行时的唯一根目录是 `$HOME/.lystar`；除 Harness 要求的 Skill 发现目录外，不要另建 `~/.local/share/agent-ops`、`~/.config/agent-ops` 或 `~/.local/state/agent-ops` 作为新路径。
+- 用户本地运行时的唯一根目录是 `$HOME/.lystar`；Codex 与 Pi 的 Skill 统一安装到 `$HOME/.agents/skills`，不要在两个 Harness 目录生成副本，也不要另建 `~/.local/share/agent-ops`、`~/.config/agent-ops` 或 `~/.local/state/agent-ops` 作为新路径。
 - 服务器资料唯一入口是 `${LYSTAR_SERVER_HOME:-$LYSTAR_HOME/servers}`。先读根 `README.md`，再读服务器 `README.md`，最后只读当前任务相关的 `services/<service-id>.md` 或 `topics/<topic-id>.md`。
 - Yean 本机可以让 `$HOME/.lystar/servers` 软链接到已有 Git 服务器资料库；普通用户使用安装器创建的真实目录。不要在各 Harness 的 Skill 目录创建服务器资料软链接。
 
 ## 安装指令
 
-全量安装当前仓库的六个 Skill：
+全量安装当前仓库的九个 Skill：
 
 ```bash
 ./install.sh --harness auto

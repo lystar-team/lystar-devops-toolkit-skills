@@ -123,6 +123,55 @@ make_incident_package() {
     install -m 0644 "$root/docs/packages/lystar-incident-ops.md" "$package/README.md"
 }
 
+make_codeup_package() {
+    package="$work/lystar-codeup-devops"
+    copy_common "$package"
+    mkdir -p "$package/runtime/agent-ops/scripts" "$package/requirements" "$package/skills/lystar-codeup-devops"
+    install -m 0755 "$root/install-lystar-codeup-devops.sh" "$package/install.sh"
+    install -m 0644 "$root/requirements/lystar-codeup-devops.txt" "$package/requirements/lystar-codeup-devops.txt"
+    install -m 0644 "$root/runtime/agent-ops/scripts/config_store.py" \
+        "$root/runtime/agent-ops/scripts/result_store.py" \
+        "$root/runtime/agent-ops/scripts/codeup_devops.py" \
+        "$package/runtime/agent-ops/scripts/"
+    install -m 0755 "$root/bin/codeupx" "$package/bin/codeupx"
+    install -m 0644 "$root/skills/lystar-codeup-devops/SKILL.md" \
+        "$package/skills/lystar-codeup-devops/SKILL.md"
+    install -m 0644 "$root/docs/packages/lystar-codeup-devops.md" "$package/README.md"
+}
+
+make_redis_package() {
+    package="$work/lystar-redis-ops"
+    copy_common "$package"
+    mkdir -p "$package/runtime/agent-ops/scripts" "$package/requirements" "$package/skills/lystar-redis-ops"
+    install -m 0755 "$root/install-lystar-redis-ops.sh" "$package/install.sh"
+    install -m 0644 "$root/requirements/lystar-redis-ops.txt" "$package/requirements/lystar-redis-ops.txt"
+    install -m 0644 "$root/runtime/agent-ops/scripts/config_store.py" \
+        "$root/runtime/agent-ops/scripts/result_store.py" \
+        "$root/runtime/agent-ops/scripts/redis_ops.py" \
+        "$package/runtime/agent-ops/scripts/"
+    install -m 0755 "$root/bin/redisx" "$package/bin/redisx"
+    install -m 0644 "$root/skills/lystar-redis-ops/SKILL.md" "$package/skills/lystar-redis-ops/SKILL.md"
+    install -m 0644 "$root/docs/packages/lystar-redis-ops.md" "$package/README.md"
+}
+
+make_magicapi_package() {
+    package="$work/lystar-magicapi-ops"
+    copy_common "$package"
+    mkdir -p "$package/runtime/agent-ops/scripts" "$package/requirements" "$package/skills/lystar-magicapi-ops/references"
+    install -m 0755 "$root/install-lystar-magicapi-ops.sh" "$package/install.sh"
+    install -m 0644 "$root/requirements/lystar-magicapi-ops.txt" "$package/requirements/lystar-magicapi-ops.txt"
+    install -m 0644 "$root/runtime/agent-ops/scripts/config_store.py" \
+        "$root/runtime/agent-ops/scripts/result_store.py" \
+        "$root/runtime/agent-ops/scripts/magicapi_ops.py" \
+        "$package/runtime/agent-ops/scripts/"
+    install -m 0755 "$root/bin/magicx" "$package/bin/magicx"
+    install -m 0644 "$root/skills/lystar-magicapi-ops/SKILL.md" "$package/skills/lystar-magicapi-ops/SKILL.md"
+    install -m 0644 "$root/skills/lystar-magicapi-ops/references/profile-schema.md" \
+        "$root/skills/lystar-magicapi-ops/references/magicapi-contract.md" \
+        "$package/skills/lystar-magicapi-ops/references/"
+    install -m 0644 "$root/docs/packages/lystar-magicapi-ops.md" "$package/README.md"
+}
+
 rm -rf "$output"
 mkdir -p "$output"
 make_db_package
@@ -131,20 +180,23 @@ make_host_package
 make_deploy_package
 make_backup_package
 make_incident_package
+make_codeup_package
+make_redis_package
+make_magicapi_package
 
-for name in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops; do
+for name in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops; do
     (cd "$work/$name" && zip -qr "$output/$name.zip" .)
 done
 
 (cd "$root" && zip -qr "$output/lystar-devops-toolkit-skills.zip" \
     VERSION LICENSE README.md AGENTS.md CONTRIBUTING.md \
     bin docs requirements runtime scripts skills templates tests \
-    install.sh install-lystar-db-ops.sh install-lystar-ssh-ops.sh install-lystar-host-ops.sh install-lystar-deploy-ops.sh install-lystar-backup-ops.sh install-lystar-incident-ops.sh \
+    install.sh install-lystar-db-ops.sh install-lystar-ssh-ops.sh install-lystar-host-ops.sh install-lystar-deploy-ops.sh install-lystar-backup-ops.sh install-lystar-incident-ops.sh install-lystar-codeup-devops.sh install-lystar-redis-ops.sh install-lystar-magicapi-ops.sh \
     -x '*/__pycache__/*' '*.pyc' 'dist/*' 'runtime/rtk' 'runtime/rtk/*')
 
 (
     cd "$output"
-    sha256sum lystar-db-ops.zip lystar-ssh-ops.zip lystar-host-ops.zip lystar-deploy-ops.zip lystar-backup-ops.zip lystar-incident-ops.zip \
+    sha256sum lystar-db-ops.zip lystar-ssh-ops.zip lystar-host-ops.zip lystar-deploy-ops.zip lystar-backup-ops.zip lystar-incident-ops.zip lystar-codeup-devops.zip lystar-redis-ops.zip lystar-magicapi-ops.zip \
         lystar-devops-toolkit-skills.zip >SHA256SUMS
 )
 
