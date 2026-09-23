@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/tokens.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "tokens"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "tokens": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["value", "state"],
+        "properties": {
+          "value": {},
+          "source": {"type": "string"},
+          "sample": {"type": "array", "items": {"type": "number"}},
+          "state": {"enum": ["verified", "inferred", "reconstructed", "unavailable"]},
+          "reason": {"type": "string"},
+          "cssSource": {"type": "string"},
+          "computedValue": {}
+        }
+      }
+    }
+  }
+}

@@ -172,6 +172,32 @@ make_magicapi_package() {
     install -m 0644 "$root/docs/packages/lystar-magicapi-ops.md" "$package/README.md"
 }
 
+make_standalone_skill_package() {
+    name=$1
+    installer=$2
+    package="$work/$name"
+    copy_common "$package"
+    mkdir -p "$package/skills/$name"
+    install -m 0755 "$root/$installer" "$package/install.sh"
+    install -m 0644 "$root/skills/$name/SKILL.md" "$package/skills/$name/SKILL.md"
+    for extra_dir in agents references examples scripts schemas evals; do
+        if [ -d "$root/skills/$name/$extra_dir" ]; then
+            mkdir -p "$package/skills/$name/$extra_dir"
+            cp -R "$root/skills/$name/$extra_dir/." "$package/skills/$name/$extra_dir/"
+        fi
+    done
+    find "$package/skills/$name" -type d -name __pycache__ -prune -exec rm -rf {} +
+    find "$package/skills/$name" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+    if [ -f "$root/skills/$name/requirements.txt" ]; then
+        install -m 0644 "$root/skills/$name/requirements.txt" "$package/skills/$name/requirements.txt"
+    fi
+    install -m 0644 "$root/docs/packages/$name.md" "$package/README.md"
+    if [ -f "$root/requirements/$name.txt" ]; then
+        mkdir -p "$package/requirements"
+        install -m 0644 "$root/requirements/$name.txt" "$package/requirements/$name.txt"
+    fi
+}
+
 rm -rf "$output"
 mkdir -p "$output"
 make_db_package
@@ -183,21 +209,24 @@ make_incident_package
 make_codeup_package
 make_redis_package
 make_magicapi_package
+make_standalone_skill_package lystar-ui-design install-lystar-ui-design.sh
+make_standalone_skill_package lystar-ui-restore install-lystar-ui-restore.sh
+make_standalone_skill_package lystar-web-restore install-lystar-web-restore.sh
 
-for name in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops; do
+for name in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops lystar-ui-design lystar-ui-restore lystar-web-restore; do
     (cd "$work/$name" && zip -qr "$output/$name.zip" .)
 done
 
 (cd "$root" && zip -qr "$output/lystar-devops-toolkit-skills.zip" \
     VERSION LICENSE README.md AGENTS.md CONTRIBUTING.md \
     bin docs requirements runtime scripts skills templates tests \
-    install.sh install-lystar-db-ops.sh install-lystar-ssh-ops.sh install-lystar-host-ops.sh install-lystar-deploy-ops.sh install-lystar-backup-ops.sh install-lystar-incident-ops.sh install-lystar-codeup-devops.sh install-lystar-redis-ops.sh install-lystar-magicapi-ops.sh \
+    install.sh install-lystar-db-ops.sh install-lystar-ssh-ops.sh install-lystar-host-ops.sh install-lystar-deploy-ops.sh install-lystar-backup-ops.sh install-lystar-incident-ops.sh install-lystar-codeup-devops.sh install-lystar-redis-ops.sh install-lystar-magicapi-ops.sh install-lystar-ui-design.sh install-lystar-ui-restore.sh install-lystar-web-restore.sh \
     -x '*/__pycache__/*' '*.pyc' 'dist/*' 'runtime/rtk' 'runtime/rtk/*')
 
 (
     cd "$output"
     sha256sum lystar-db-ops.zip lystar-ssh-ops.zip lystar-host-ops.zip lystar-deploy-ops.zip lystar-backup-ops.zip lystar-incident-ops.zip lystar-codeup-devops.zip lystar-redis-ops.zip lystar-magicapi-ops.zip \
-        lystar-devops-toolkit-skills.zip >SHA256SUMS
+        lystar-ui-design.zip lystar-ui-restore.zip lystar-web-restore.zip lystar-devops-toolkit-skills.zip >SHA256SUMS
 )
 
 echo "安装包已生成：$output"

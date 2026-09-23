@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/adapter.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "projectId", "framework", "target", "captureAdapter", "baseUrl", "entry", "allowedFiles", "forbiddenFiles"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "projectId": {"type": "string", "minLength": 1},
+    "framework": {"type": "string", "minLength": 1},
+    "target": {"type": "string", "minLength": 1},
+    "captureAdapter": {"type": "string", "minLength": 1},
+    "browserCommand": {"type": "string"},
+    "sessionScope": {"type": "string"},
+    "sessionPrefix": {"type": "string"},
+    "startCommand": {"type": "string"},
+    "stopCommand": {"type": "string"},
+    "baseUrl": {"type": "string", "minLength": 1},
+    "entry": {"type": "string", "minLength": 1},
+    "readySelector": {"type": "string"},
+    "loginIndicators": {"type": "array", "items": {"type": "string"}},
+    "blankIndicators": {"type": "array", "items": {"type": "string"}},
+    "allowedFiles": {"type": "array", "items": {"type": "string"}},
+    "forbiddenFiles": {"type": "array", "items": {"type": "string"}},
+    "stateEntry": {"type": "string"},
+    "fixtureRoot": {"type": "string"},
+    "fontSources": {"type": "array", "items": {"type": "string"}},
+    "assetRoots": {"type": "array", "items": {"type": "string"}},
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "locale": {"type": "string"},
+        "timezone": {"type": "string"},
+        "device": {"type": "string"},
+        "fontSet": {"type": "array", "items": {"type": "string"}},
+        "safeArea": {"type": "object"}
+      }
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/asset-catalog.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "root", "scanPaths", "summary", "files"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "root": {"type": "string", "minLength": 1},
+    "generatedAt": {"type": "string"},
+    "scanPaths": {"type": "array", "items": {"type": "string"}},
+    "excludedDirectories": {"type": "array", "items": {"type": "string"}},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fileCount", "imageCount", "svgCount", "fontCount", "duplicateGroupCount", "missingScanPaths", "cacheReusedCount"],
+      "properties": {
+        "fileCount": {"type": "integer", "minimum": 0},
+        "imageCount": {"type": "integer", "minimum": 0},
+        "svgCount": {"type": "integer", "minimum": 0},
+        "fontCount": {"type": "integer", "minimum": 0},
+        "duplicateGroupCount": {"type": "integer", "minimum": 0},
+        "missingScanPaths": {"type": "array", "items": {"type": "string"}},
+        "cacheReusedCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "duplicates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sha256", "paths"],
+        "properties": {
+          "sha256": {"type": "string", "minLength": 1},
+          "paths": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "type", "bytes", "sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "type": {"enum": ["image", "svg", "font"]},
+          "bytes": {"type": "integer", "minimum": 0},
+          "mtimeNs": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "minLength": 1},
+          "status": {"type": "string"},
+          "error": {"type": "string"},
+          "metadata": {"type": "object", "additionalProperties": true}
+        }
+      }
+    }
+  }
+}

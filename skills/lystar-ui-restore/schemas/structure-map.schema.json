@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/structure-map.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "createdAt", "status", "captureHash", "geometryHash", "regionsHash", "transform", "regions", "unresolvedRegionIds"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "viewportId": {"type": ["string", "null"]},
+    "workflowMode": {"enum": ["iteration", "acceptance"]},
+    "createdAt": {"type": "string", "minLength": 1},
+    "status": {"enum": ["verified", "unresolved"]},
+    "captureHash": {"type": "string", "minLength": 1},
+    "geometryHash": {"type": "string", "minLength": 1},
+    "regionsHash": {"type": "string", "minLength": 1},
+    "transform": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["sourceSpace", "targetSpace", "screenshotMode", "scaleX", "scaleY", "translateX", "translateY", "imageSize", "cssViewport"]
+    },
+    "regions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["regionId", "matched", "matchCount", "visible", "renderBbox", "sourceSelector", "state"],
+        "properties": {
+          "regionId": {"type": "string", "minLength": 1},
+          "matched": {"type": "boolean"},
+          "matchCount": {"type": "integer", "minimum": 0},
+          "visible": {"type": ["boolean", "null"]},
+          "renderBbox": {
+            "anyOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["x", "y", "width", "height"],
+                "properties": {
+                  "x": {"type": "number"},
+                  "y": {"type": "number"},
+                  "width": {"type": "number", "minimum": 0},
+                  "height": {"type": "number", "minimum": 0}
+                }
+              }
+            ]
+          },
+          "sourceSelector": {"type": ["string", "null"]},
+          "state": {"enum": ["verified", "unavailable"]}
+        }
+      }
+    },
+    "unresolvedRegionIds": {"type": "array", "items": {"type": "string"}}
+  }
+}

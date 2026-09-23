@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/reference-meta.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "reference", "sha256", "width", "height", "mode", "crops", "samples", "coordinateSystem"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "reference": {"type": "string", "minLength": 1},
+    "sha256": {"type": "string", "minLength": 1},
+    "width": {"type": "integer", "minimum": 1},
+    "height": {"type": "integer", "minimum": 1},
+    "mode": {"type": "string", "minLength": 1},
+    "crops": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "samples": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "coordinateSystem": {"type": "string", "minLength": 1}
+  }
+}

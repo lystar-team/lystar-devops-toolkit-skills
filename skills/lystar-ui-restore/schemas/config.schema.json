@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/config.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "referenceMode", "target", "captureAdapter", "screenshotMode", "thresholds"],
+  "allOf": [
+    {
+      "anyOf": [
+        {"required": ["viewport"]},
+        {"required": ["viewports"]}
+      ]
+    }
+  ],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "referenceMode": {"enum": ["screenshot", "design-image", "local-live", "public-live", "source-code"]},
+    "target": {"enum": ["web", "h5", "native-app", "miniprogram", "svg", "canvas", "webgl", "3d", "custom"]},
+    "captureAdapter": {"type": "string", "minLength": 1},
+    "workflowMode": {"enum": ["iteration", "acceptance"]},
+    "route": {"type": "string"},
+    "readySelector": {"type": "string"},
+    "disableAnimation": {"type": "boolean"},
+    "viewport": {"$ref": "#/$defs/viewport"},
+    "viewports": {"type": "array", "items": {"$ref": "#/$defs/viewportProfile"}},
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requireFonts": {"type": "boolean"},
+        "requireImages": {"type": "boolean"},
+        "failOnPageErrors": {"type": "boolean"},
+        "networkIdle": {"type": "boolean"},
+        "timeoutMs": {"type": "integer", "minimum": 1},
+        "allowSuspiciousScreenshot": {"type": "boolean"}
+      }
+    },
+    "assetPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requireManifest": {"type": "boolean"},
+        "requireReviewedAssets": {"type": "boolean"}
+      }
+    },
+    "layerPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requireVisualOwner": {"type": "boolean"}
+      }
+    },
+    "locale": {"type": "string"},
+    "timezone": {"type": "string"},
+    "theme": {"type": "string"},
+    "screenshotMode": {"enum": ["viewport", "fullPage", "clip", "scroll-segment"]},
+    "renderMode": {"enum": ["dom-css", "dom-css-svg", "auto-runtime", "canvas", "webgl", "hybrid", "native-runtime", "unavailable"]},
+    "scroll": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "clip"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "clip": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/bbox"}]},
+        "clipSpace": {"enum": ["css-viewport-px"]}
+      }
+    },
+    "masks": {"type": "array", "items": {"$ref": "#/$defs/mask"}},
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["macroAnchorPx", "componentAnchorPx", "maxDiffPixels", "maxDiffPixelRatio", "pixelThreshold"],
+      "properties": {
+        "macroAnchorPx": {"anyOf": [{"type": "null"}, {"type": "number", "minimum": 0}]},
+        "componentAnchorPx": {"anyOf": [{"type": "null"}, {"type": "number", "minimum": 0}]},
+        "maxDiffPixels": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]},
+        "maxDiffPixelRatio": {"anyOf": [{"type": "null"}, {"type": "number", "minimum": 0, "maximum": 1}]},
+        "pixelThreshold": {"anyOf": [{"type": "null"}, {"type": "number", "minimum": 0, "maximum": 1}]},
+        "maxExtraRegionRate": {"anyOf": [{"type": "null"}, {"type": "number", "minimum": 0, "maximum": 1}]},
+        "maxMissingAreaRate": {"anyOf": [{"type": "null"}, {"type": "number", "minimum": 0, "maximum": 1}]}
+      }
+    }
+  },
+  "$defs": {
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "deviceScaleFactor"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "deviceScaleFactor": {"type": "number", "exclusiveMinimum": 0},
+        "imageWidth": {"type": "integer", "minimum": 1},
+        "imageHeight": {"type": "integer", "minimum": 1}
+      }
+    },
+    "viewportProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "width", "height", "deviceScaleFactor"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "deviceScaleFactor": {"type": "number", "exclusiveMinimum": 0},
+        "imageWidth": {"type": "integer", "minimum": 1},
+        "imageHeight": {"type": "integer", "minimum": 1},
+        "purpose": {"type": "string"},
+        "reference": {"type": "string"},
+        "referencePath": {"type": "string"},
+        "regions": {"type": "string"},
+        "regionsPath": {"type": "string"},
+        "required": {"type": "boolean"}
+      }
+    },
+    "bbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number", "minimum": 0},
+        "height": {"type": "number", "minimum": 0}
+      }
+    },
+    "mask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "bbox", "reason", "participatesInGate"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "bbox": {"$ref": "#/$defs/bbox"},
+        "reason": {"type": "string", "minLength": 1},
+        "createdBy": {"type": "string"},
+        "createdAt": {"type": "string"},
+        "participatesInGate": {"type": "boolean"}
+      }
+    }
+  }
+}

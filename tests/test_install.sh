@@ -75,6 +75,13 @@ assert_skill "$auto/home/.agents/skills" lystar-incident-ops
 assert_skill "$auto/home/.agents/skills" lystar-codeup-devops
 assert_skill "$auto/home/.agents/skills" lystar-redis-ops
 assert_skill "$auto/home/.agents/skills" lystar-magicapi-ops
+assert_skill "$auto/home/.agents/skills" lystar-ui-design
+assert_skill "$auto/home/.agents/skills" lystar-ui-restore
+assert_skill "$auto/home/.agents/skills" lystar-web-restore
+test -f "$auto/home/.agents/skills/lystar-ui-design/agents/openai.yaml"
+test -f "$auto/home/.agents/skills/lystar-ui-restore/scripts/ui_restore.py"
+test -f "$auto/home/.agents/skills/lystar-ui-restore/schemas/config.schema.json"
+test -f "$auto/home/.agents/skills/lystar-web-restore/scripts/build_local_mirror.py"
 test ! -e "$auto/home/.claude/skills/lystar-db-ops"
 test ! -e "$auto/home/.config/opencode/skills/lystar-db-ops"
 assert_server_data "$auto/home/.lystar/servers"
@@ -137,6 +144,28 @@ assert_skill "$magicapi/home/.agents/skills" lystar-magicapi-ops
 test -x "$magicapi/home/.lystar/bin/magicx"
 test -f "$magicapi/home/.lystar/runtime/scripts/magicapi_ops.py"
 test -f "$magicapi/home/.agents/skills/lystar-magicapi-ops/references/magicapi-contract.md"
+
+# UI Skills 携带各自的脚本、Schema、Agent 元数据和依赖说明。
+for suffix in ui-design ui-restore web-restore; do
+    skill_name="lystar-$suffix"
+    target="$temp/$suffix"
+    HOME="$target/home" \
+    PATH="/usr/bin:/bin" \
+    XDG_DATA_HOME="$target/data" \
+    XDG_STATE_HOME="$target/state" \
+    XDG_BIN_HOME="$target/bin" \
+    PYTHON_BIN="$fake_python" \
+        sh "$root/install-$skill_name.sh" --harness pi >/dev/null
+    assert_skill "$target/home/.agents/skills" "$skill_name"
+    test -f "$target/home/.agents/skills/$skill_name/agents/openai.yaml"
+done
+test -f "$temp/ui-restore/home/.agents/skills/lystar-ui-restore/scripts/ui_restore.py"
+test -f "$temp/ui-restore/home/.agents/skills/lystar-ui-restore/schemas/config.schema.json"
+test ! -e "$temp/ui-restore/home/.agents/skills/lystar-ui-restore/tests"
+test -f "$temp/ui-restore/home/.agents/skills/lystar-ui-restore/requirements.txt"
+test -f "$temp/web-restore/home/.agents/skills/lystar-web-restore/scripts/extract_rendered_styles.py"
+test -f "$temp/web-restore/home/.agents/skills/lystar-web-restore/requirements.txt"
+test ! -e "$temp/ui-restore/home/.lystar/bin/lystar-ui-restore"
 
 # 显式多选与自定义服务器目录。
 multi="$temp/multi"
@@ -220,12 +249,12 @@ test -f "$migrated/home/.lystar/servers/README.md"
 test -f "$migrated/old-config/agent-ops/ssh.toml"
 test -f "$migrated/old-server/README.md"
 
-# 更新器记录了九个 Skill 和新布局。
+# 更新器记录了十二个 Skill 和新布局。
 python3 - "$auto/home/.lystar/state/update/installed.json" <<'PY'
 import json
 import sys
 state = json.load(open(sys.argv[1], encoding="utf-8"))
-assert sorted(state["skills"]) == ["lystar-backup-ops", "lystar-codeup-devops", "lystar-db-ops", "lystar-deploy-ops", "lystar-host-ops", "lystar-incident-ops", "lystar-magicapi-ops", "lystar-redis-ops", "lystar-ssh-ops"]
+assert sorted(state["skills"]) == ["lystar-backup-ops", "lystar-codeup-devops", "lystar-db-ops", "lystar-deploy-ops", "lystar-host-ops", "lystar-incident-ops", "lystar-magicapi-ops", "lystar-redis-ops", "lystar-ssh-ops", "lystar-ui-design", "lystar-ui-restore", "lystar-web-restore"]
 assert len(state["skills"]["lystar-db-ops"]["skill_homes"]) == 1
 assert state["skills"]["lystar-ssh-ops"]["lystar_home"].endswith("/.lystar")
 assert state["skills"]["lystar-ssh-ops"]["server_home"].endswith("/.lystar/servers")

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/evidence.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "evidence"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sourceType", "sourceRef", "state"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "objectType": {"type": "string"},
+          "sourceType": {"type": "string", "minLength": 1},
+          "sourceRef": {"type": "string", "minLength": 1},
+          "bbox": {"type": ["object", "null"]},
+          "state": {"enum": ["verified", "inferred", "reconstructed", "unavailable"]},
+          "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "notes": {"type": "string"}
+        }
+      }
+    }
+  }
+}

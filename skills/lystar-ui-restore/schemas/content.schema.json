@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/content.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "contents"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "contents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "regionId", "type", "state"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "regionId": {"type": "string", "minLength": 1},
+          "type": {"enum": ["text", "icon", "image", "table", "list", "state"]},
+          "text": {"type": ["string", "null"]},
+          "source": {"type": ["string", "null"]},
+          "lineCount": {"type": ["integer", "null"], "minimum": 0},
+          "bbox": {"type": ["object", "null"]},
+          "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "state": {"enum": ["verified", "inferred", "reconstructed", "unavailable"]},
+          "reviewed": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

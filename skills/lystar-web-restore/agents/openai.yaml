@@ -1,0 +1,6 @@
+interface:
+  display_name: "LYStar Web Restore"
+  short_description: "提取公开网页并生成高保真 HTML/CSS 镜像"
+  default_prompt: "使用 $lystar-web-restore 从这个公开网页提取真实 DOM、CSS、主题、状态和动画，生成可直接打开的本地 HTML/CSS 镜像，再还原到项目中。"
+policy:
+  allow_implicit_invocation: true

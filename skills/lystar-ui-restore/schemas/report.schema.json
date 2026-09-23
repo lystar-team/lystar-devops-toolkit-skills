@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/report.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "status", "visualStatus", "acceptedRegions", "unresolvedItems", "acceptedVariance", "unverifiedViewports", "renderMode"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "status": {"enum": ["accepted", "unresolved", "blocked"]},
+    "visualStatus": {"enum": ["accepted", "unresolved", "blocked", "not-run"]},
+    "acceptedRegions": {"type": "array", "items": {"type": "string"}},
+    "unresolvedItems": {"type": "array", "items": {"type": "object"}},
+    "acceptedVariance": {"type": "array", "items": {"type": "object"}},
+    "unverifiedViewports": {"type": "array", "items": {"type": "object"}},
+    "verifiedViewports": {"type": "array", "items": {"type": "object"}},
+    "gates": {"type": "object", "additionalProperties": {"$ref": "#/$defs/gate"}},
+    "checks": {"type": "object"},
+    "lastPatch": {"type": ["string", "null"]},
+    "functionalCheck": {"type": "string"},
+    "accessibilityCheck": {"type": "string"},
+    "consoleErrors": {"type": "string"},
+    "resourceIssues": {"type": "array", "items": {"type": "object"}},
+    "renderMode": {"enum": ["dom-css", "dom-css-svg", "auto-runtime", "canvas", "webgl", "hybrid", "native-runtime", "unavailable"]},
+    "referenceEnvironment": {"type": "string"},
+    "renderEnvironment": {"type": "string"},
+    "artifacts": {"type": "object"}
+  },
+  "$defs": {
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["pass", "warn", "blocked", "not-run", "unavailable"]},
+        "reasons": {"type": "array", "items": {"type": "string"}},
+        "evidenceIds": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

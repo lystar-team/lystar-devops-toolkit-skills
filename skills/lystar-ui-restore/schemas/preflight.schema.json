@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/preflight.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "status", "root", "reference", "render", "blocked", "warnings", "details"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "workflowMode": {"enum": ["iteration", "acceptance"]},
+    "status": {"enum": ["pass", "warn", "blocked"]},
+    "root": {"type": "string", "minLength": 1},
+    "reference": {"type": ["string", "null"]},
+    "render": {"type": ["string", "null"]},
+    "blocked": {"type": "array", "items": {"type": "string"}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "details": {"type": "object", "additionalProperties": true}
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/decisions.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "contract", "decisions", "unresolved"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "contract": {"type": ["object", "null"], "additionalProperties": true},
+    "decisions": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "unresolved": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+  }
+}

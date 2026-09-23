@@ -9,7 +9,7 @@
 
 ## 安装指令
 
-全量安装当前仓库的九个 Skill：
+全量安装当前仓库的十二个 Skill：
 
 ```bash
 ./install.sh --harness auto
@@ -21,7 +21,7 @@
 ./install-lystar-ssh-ops.sh --harness codex
 ```
 
-其中 `ssh`、`db`、`host`、`deploy`、`backup`、`incident` 必须与对应安装脚本和 Skill 名称保持一致。安装完成后验证 `$HOME/.lystar/bin` 下的命令和 `$HOME/.lystar/servers/README.md`。
+安装器文件名与 Skill 名称保持一致。UI Skill 不提供 PATH 命令；运维 Skill 的安装完成后验证 `$HOME/.lystar/bin` 下的命令和 `$HOME/.lystar/servers/README.md`。
 
 ## 目录规则
 

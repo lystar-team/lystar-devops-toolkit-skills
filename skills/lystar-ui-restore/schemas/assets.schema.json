@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/assets.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "assets"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assetId", "regionId", "type", "renderMode", "state"],
+        "properties": {
+          "assetId": {"type": "string", "minLength": 1},
+          "regionId": {"type": "string", "minLength": 1},
+          "evidenceIds": {"type": "array", "items": {"type": "string"}},
+          "type": {"enum": ["image", "svg", "icon", "video", "canvas", "webgl", "lottie", "rive", "placeholder"]},
+          "renderMode": {"enum": ["dom-css", "dom-css-svg", "auto-runtime", "canvas", "webgl", "hybrid", "native-runtime", "unavailable"]},
+          "visualOwner": {"enum": ["image", "svg", "icon", "css", "text", "chart", "canvas", "webgl", "native", "runtime", "component", "unknown"]},
+          "sourceKind": {"enum": ["project", "reference", "generated", "runtime", "unknown"]},
+          "sourcePath": {"type": ["string", "null"]},
+          "generatedPath": {"type": ["string", "null"]},
+          "placeholderPath": {"type": ["string", "null"]},
+          "naturalSize": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/size"}]},
+          "displaySize": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/size"}]},
+          "crop": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/bbox"}]},
+          "geometry": {"$ref": "#/$defs/geometry"},
+          "background": {"$ref": "#/$defs/background"},
+          "generation": {"type": ["object", "null"]},
+          "checks": {"type": "object"},
+          "transparent": {"type": ["boolean", "null"]},
+          "state": {"enum": ["verified", "inferred", "reconstructed", "unavailable"]},
+          "reviewed": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "size": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": {"type": "number", "exclusiveMinimum": 0},
+        "height": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "bbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number", "minimum": 0},
+        "height": {"type": "number", "minimum": 0}
+      }
+    },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intrinsicAspectRatio": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "displayAspectRatio": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "aspectTolerance": {"type": ["number", "null"], "minimum": 0},
+        "aspectChecked": {"type": "boolean"},
+        "fit": {"enum": ["contain", "cover", "none", "unknown"]},
+        "visibleBbox": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/bbox"}]}
+      }
+    },
+    "background": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"enum": ["transparent", "flat", "page-matched", "unknown"]},
+        "edgeChecked": {"type": "boolean"},
+        "unintendedFrame": {"type": "boolean"},
+        "sample": {"type": "array", "items": {"type": "number"}}
+      }
+    }
+  }
+}

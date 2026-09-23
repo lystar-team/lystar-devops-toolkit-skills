@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/diff.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "status", "reference", "render", "dimensions", "masks", "capture", "thresholds", "thresholdsConfigured", "pixel", "anchors", "structure", "regions", "acceptedVarianceCandidates", "limitations"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "workflowMode": {"enum": ["iteration", "acceptance"]},
+    "status": {"enum": ["accepted", "unresolved", "blocked"]},
+    "reference": {"type": "string", "minLength": 1},
+    "render": {"type": "string", "minLength": 1},
+    "dimensions": {"type": "object", "additionalProperties": true},
+    "masks": {"type": "object", "additionalProperties": true},
+    "capture": {"type": "object", "additionalProperties": true},
+    "preflight": {"type": "object", "additionalProperties": true},
+    "sourceHashes": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+    "thresholds": {"type": "object", "additionalProperties": true},
+    "thresholdsConfigured": {"type": "boolean"},
+    "pixel": {"type": "object", "additionalProperties": true},
+    "anchors": {"type": "object", "additionalProperties": true},
+    "structure": {"type": "object", "additionalProperties": true},
+    "regions": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "acceptedVarianceCandidates": {"type": "array"},
+    "acceptanceGate": {"type": "object", "additionalProperties": true},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/capture.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "referenceSource", "referenceEnvironment", "renderEnvironment", "viewport", "coordinateSystem", "renderMode"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "workflowMode": {"enum": ["iteration", "acceptance"]},
+    "referenceSource": {"enum": ["screenshot", "design-image", "local-live", "public-live", "source-code"]},
+    "referenceEnvironment": {"$ref": "#/$defs/environment"},
+    "renderEnvironment": {"$ref": "#/$defs/environment"},
+    "viewport": {"$ref": "#/$defs/viewport"},
+    "route": {"type": "string"},
+    "pageState": {"type": "string"},
+    "scroll": {"type": "object", "additionalProperties": false, "properties": {
+      "x": {"type": "number"},
+      "y": {"type": "number"},
+      "clip": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/bbox"}]}
+    }},
+    "theme": {"type": "string"},
+    "runtimeOverrides": {"type": "object"},
+    "runtimeState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "applied", "observed", "unsupported"],
+      "properties": {
+        "requested": {"type": "object"},
+        "applied": {"type": "object"},
+        "observed": {"type": "object"},
+        "unsupported": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "fontSet": {"type": "object"},
+    "assetPolicy": {"type": "object"},
+    "animation": {"type": "object"},
+    "readiness": {"$ref": "#/$defs/readiness"},
+    "diagnostics": {"type": "object", "additionalProperties": {"type": "string"}},
+    "session": {"type": "object"},
+    "sourceHashes": {"type": "object", "additionalProperties": {"type": "string"}},
+    "coordinateSystem": {"type": "string", "minLength": 1},
+    "coordinateTransform": {"type": "object", "additionalProperties": true},
+    "renderMode": {"enum": ["dom-css", "dom-css-svg", "auto-runtime", "canvas", "webgl", "hybrid", "native-runtime", "unavailable"]}
+  },
+  "$defs": {
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "deviceScaleFactor"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "deviceScaleFactor": {"type": "number", "exclusiveMinimum": 0},
+        "imageWidth": {"type": "integer", "minimum": 1},
+        "imageHeight": {"type": "integer", "minimum": 1}
+      }
+    },
+    "bbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number", "minimum": 0},
+        "height": {"type": "number", "minimum": 0}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["knowledge"],
+      "properties": {
+        "knowledge": {"enum": ["known", "unknown", "partially-known"]},
+        "browser": {"type": ["string", "object", "null"]},
+        "os": {"type": ["string", "object", "null"]},
+        "device": {"type": ["string", "object", "null"]},
+        "fontSet": {"type": ["array", "object", "null"]},
+        "toolVersion": {"type": ["string", "object", "null"]}
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["ready", "suspicious", "blocked", "unknown"]},
+        "url": {"type": "string"},
+        "title": {"type": "string"},
+        "readySelector": {"type": ["string", "null"]},
+        "readySelectorMatched": {"type": ["boolean", "null"]},
+        "fonts": {"type": ["string", "null"]},
+        "imagesComplete": {"type": ["boolean", "null"]},
+        "bodyTextLength": {"type": ["integer", "null"], "minimum": 0},
+        "visibleElementCount": {"type": ["integer", "null"], "minimum": 0},
+        "loginDetected": {"type": "boolean"},
+        "blankDetected": {"type": "boolean"},
+        "screenshot": {"type": ["string", "null"]},
+        "imageSha256": {"type": ["string", "null"]},
+        "imageSize": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/size"}, {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer", "minimum": 1}}]},
+        "imageStats": {"type": "object"},
+        "reasons": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "size": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

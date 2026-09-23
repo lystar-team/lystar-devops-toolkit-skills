@@ -17,10 +17,12 @@ jobs:
         run: python -m pip install -r requirements/all.txt
       - name: Static checks
         run: |
-          sh -n install.sh install-lystar-db-ops.sh install-lystar-ssh-ops.sh install-lystar-host-ops.sh install-lystar-deploy-ops.sh install-lystar-backup-ops.sh install-lystar-incident-ops.sh install-lystar-codeup-devops.sh install-lystar-redis-ops.sh install-lystar-magicapi-ops.sh scripts/install-lib.sh scripts/build-packages.sh
-          python -m py_compile scripts/skill-update.py runtime/agent-ops/scripts/*.py runtime/agent-ops/tests/*.py
+          sh -n install.sh install-lystar-db-ops.sh install-lystar-ssh-ops.sh install-lystar-host-ops.sh install-lystar-deploy-ops.sh install-lystar-backup-ops.sh install-lystar-incident-ops.sh install-lystar-codeup-devops.sh install-lystar-redis-ops.sh install-lystar-magicapi-ops.sh install-lystar-ui-design.sh install-lystar-ui-restore.sh install-lystar-web-restore.sh scripts/install-lib.sh scripts/build-packages.sh
+          python -m py_compile scripts/skill-update.py runtime/agent-ops/scripts/*.py runtime/agent-ops/tests/*.py skills/lystar-ui-restore/scripts/*.py skills/lystar-web-restore/scripts/*.py skills/lystar-ui-restore/tests/*.py
       - name: Runtime tests
-        run: python -m unittest discover runtime/agent-ops/tests
+        run: |
+          python -m unittest discover runtime/agent-ops/tests
+          python -m unittest discover skills/lystar-ui-restore/tests
       - name: Installer tests
         run: sh tests/test_install.sh
       - name: Package tests

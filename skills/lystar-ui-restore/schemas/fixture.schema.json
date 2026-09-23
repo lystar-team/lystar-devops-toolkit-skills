@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/fixture.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "route", "pageState"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "route": {"type": "string", "minLength": 1},
+    "pageState": {"type": "string", "minLength": 1},
+    "apiFixture": {"type": ["string", "null"]},
+    "loginState": {"type": ["string", "null"]},
+    "freezeTime": {"type": ["string", "null"]},
+    "locale": {"type": "string"},
+    "timezone": {"type": "string"},
+    "waitFor": {"type": "array", "items": {"type": "string"}},
+    "disableAnimation": {"type": "boolean"},
+    "seed": {"type": ["string", "integer", "null"]},
+    "networkMode": {"enum": ["fixture", "live", "offline", "unknown"]},
+    "stateActions": {"type": "array", "items": {"$ref": "#/$defs/stateAction"}}
+  },
+  "$defs": {
+    "stateAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": {"enum": ["click", "fill", "hover", "press", "wait"]},
+        "selector": {"type": "string"},
+        "value": {"type": "string"},
+        "key": {"type": "string"},
+        "ms": {"type": ["integer", "number"], "minimum": 0}
+      },
+      "allOf": [
+        {"if": {"properties": {"action": {"enum": ["click", "hover"]}}}, "then": {"required": ["selector"]}},
+        {"if": {"properties": {"action": {"const": "fill"}}}, "then": {"required": ["selector", "value"]}},
+        {"if": {"properties": {"action": {"const": "press"}}}, "then": {"required": ["key"]}}
+      ]
+    }
+  }
+}

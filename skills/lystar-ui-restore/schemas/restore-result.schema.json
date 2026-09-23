@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/restore-result.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "state": {"type": ["object", "null"]},
+    "report": {"type": ["object", "null"]},
+    "patch": {"type": ["object", "null"]},
+    "evidence": {"type": ["object", "string", "null"]},
+    "regions": {"type": ["object", "string", "null"]},
+    "tokens": {"type": ["object", "string", "null"]},
+    "content": {"type": ["object", "string", "null"]},
+    "assets": {"type": ["object", "string", "null"]},
+    "renderResult": {"type": ["object", "string", "null"]},
+    "diffReport": {"type": ["object", "string", "null"]},
+    "nextActiveRegion": {"type": ["string", "null"]}
+  },
+  "anyOf": [
+    {"required": ["state"]},
+    {"required": ["report"]},
+    {"required": ["patch"]},
+    {"required": ["evidence"]},
+    {"required": ["regions"]},
+    {"required": ["tokens"]},
+    {"required": ["content"]},
+    {"required": ["assets"]},
+    {"required": ["renderResult"]},
+    {"required": ["diffReport"]}
+  ]
+}

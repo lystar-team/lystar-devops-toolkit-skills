@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/geometry.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "capturedAt", "url", "coordinateSystem", "viewport", "document", "regions"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "capturedAt": {"type": "string", "minLength": 1},
+    "session": {"type": "string"},
+    "captureHash": {"type": ["string", "null"]},
+    "source": {"type": "object", "additionalProperties": true},
+    "url": {"type": "string"},
+    "title": {"type": "string"},
+    "coordinateSystem": {"type": "string", "minLength": 1},
+    "viewport": {"$ref": "#/$defs/viewport"},
+    "document": {"type": "object", "additionalProperties": true},
+    "regions": {"type": "object", "additionalProperties": {"$ref": "#/$defs/probe"}},
+    "discovered": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "unmatchedSelectors": {"type": "array", "items": {"type": "string"}},
+    "requiredUnmatchedSelectors": {"type": "array", "items": {"type": "string"}},
+    "status": {"enum": ["pass", "unresolved"]}
+  },
+  "$defs": {
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "devicePixelRatio", "scrollX", "scrollY"],
+      "properties": {
+        "width": {"type": "number", "minimum": 0},
+        "height": {"type": "number", "minimum": 0},
+        "devicePixelRatio": {"type": "number", "exclusiveMinimum": 0},
+        "scrollX": {"type": "number"},
+        "scrollY": {"type": "number"}
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "selector", "matched", "matchCount", "matches"],
+      "properties": {
+        "id": {"type": "string"},
+        "selector": {"type": "string"},
+        "matched": {"type": "boolean"},
+        "matchCount": {"type": "integer", "minimum": 0},
+        "matches": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+      }
+    }
+  }
+}

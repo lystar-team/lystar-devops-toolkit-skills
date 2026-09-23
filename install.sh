@@ -29,6 +29,9 @@ install_regular_skill lystar-incident-ops
 install_regular_skill lystar-codeup-devops
 install_regular_skill lystar-redis-ops
 install_regular_skill lystar-magicapi-ops
+install_regular_skill lystar-ui-design
+install_regular_skill lystar-ui-restore
+install_regular_skill lystar-web-restore
 install_server_data
 remove_legacy_server_links
 remove_legacy_skill sql-multi-db-ops
@@ -43,6 +46,9 @@ record_skill_installation lystar-incident-ops
 record_skill_installation lystar-codeup-devops
 record_skill_installation lystar-redis-ops
 record_skill_installation lystar-magicapi-ops
+record_skill_installation lystar-ui-design
+record_skill_installation lystar-ui-restore
+record_skill_installation lystar-web-restore
 verify_command dbx
 verify_command sshx
 verify_command hostx
@@ -57,6 +63,6 @@ verify_command lystar-migrate
 
 echo "完整安装完成："
 echo "  命令：$bin_home/dbx、$bin_home/sshx、$bin_home/hostx、$bin_home/deployx、$bin_home/backupx、$bin_home/incidentx、$bin_home/codeupx、$bin_home/redisx、$bin_home/magicx、$bin_home/lystar-skill-update、$bin_home/lystar-migrate"
-print_skill_locations lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops
+print_skill_locations lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops lystar-ui-design lystar-ui-restore lystar-web-restore
 echo "  服务器资料：$server_ops_home"
 print_path_notice

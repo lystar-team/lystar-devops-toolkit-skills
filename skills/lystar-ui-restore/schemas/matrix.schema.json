@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/matrix.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "status", "profiles", "blockedViewportIds", "unresolvedViewportIds"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "workflowMode": {"enum": ["iteration", "acceptance"]},
+    "status": {"enum": ["pass", "unresolved", "blocked"]},
+    "acceptanceStatus": {"enum": ["accepted", "unresolved", "blocked", "not-run"]},
+    "profiles": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "blockedViewportIds": {"type": "array", "items": {"type": "string"}},
+    "unresolvedViewportIds": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,0 +1,6 @@
+interface:
+  display_name: "LYStar UI Restore"
+  short_description: "证据驱动的 UI 捕获、几何归一化、差异校验与补丁追踪"
+  default_prompt: "使用 $lystar-ui-restore 建立场景 Contract，完成页面捕获、几何归一化、视觉差异和补丁验证。"
+policy:
+  allow_implicit_invocation: true

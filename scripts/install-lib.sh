@@ -281,12 +281,15 @@ install_regular_skill_at() {
     skill_name=$2
     mkdir -p "$skills_home/$skill_name"
     install -m 0644 "$root/skills/$skill_name/SKILL.md" "$skills_home/$skill_name/SKILL.md"
-    for extra_dir in references examples; do
+    for extra_dir in agents references examples scripts schemas evals; do
         if [ -d "$root/skills/$skill_name/$extra_dir" ]; then
             mkdir -p "$skills_home/$skill_name/$extra_dir"
             cp -R "$root/skills/$skill_name/$extra_dir/." "$skills_home/$skill_name/$extra_dir/"
         fi
     done
+    if [ -f "$root/skills/$skill_name/requirements.txt" ]; then
+        install -m 0644 "$root/skills/$skill_name/requirements.txt" "$skills_home/$skill_name/requirements.txt"
+    fi
     install -m 0644 "$root/VERSION" "$skills_home/$skill_name/VERSION"
 }
 

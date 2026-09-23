@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/regions.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "coordinateSystem", "regions"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "coordinateSystem": {"type": "string", "minLength": 1},
+    "extraRegions": {"type": "array", "items": {"type": "object"}},
+    "regions": {"type": "array", "items": {"$ref": "#/$defs/region"}}
+  },
+  "$defs": {
+    "bbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number", "minimum": 0},
+        "height": {"type": "number", "minimum": 0}
+      }
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "bbox", "visualOwner", "allowedLayers", "evidenceIds", "allowedProperties", "forbiddenChanges"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "parent": {"type": ["string", "null"]},
+        "role": {"type": "string", "minLength": 1},
+        "locator": {"type": "object"},
+        "bbox": {"$ref": "#/$defs/bbox"},
+        "renderBbox": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/bbox"}]},
+        "anchors": {"type": "object"},
+        "repeat": {"type": ["object", "null"]},
+        "visualOwner": {"enum": ["image", "svg", "icon", "css", "text", "chart", "canvas", "webgl", "native", "runtime", "component", "unknown"]},
+        "allowedLayers": {"type": "array", "items": {"type": "string"}},
+        "layerOwners": {"type": "object", "additionalProperties": {"type": "string"}},
+        "visualChecks": {"type": "object"},
+        "requiredForAcceptance": {"type": "boolean"},
+        "evidenceIds": {"type": "array", "items": {"type": "string"}},
+        "allowedProperties": {"type": "array", "items": {"type": "string"}},
+        "forbiddenChanges": {"type": "array", "items": {"type": "string"}},
+        "visible": {"type": "boolean"},
+        "masked": {"type": "boolean"}
+      }
+    }
+  }
+}

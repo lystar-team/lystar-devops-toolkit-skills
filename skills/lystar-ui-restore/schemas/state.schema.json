@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lystar-ui-restore/state.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scenarioId", "reference", "capture", "regions", "tokens", "decisions", "activeRegion", "currentRender", "diffReport", "status", "updatedAt"],
+  "properties": {
+    "schemaVersion": {"type": "string", "minLength": 1},
+    "scenarioId": {"type": "string", "minLength": 1},
+    "reference": {"type": "string", "minLength": 1},
+    "capture": {"type": "string", "minLength": 1},
+    "regions": {"type": "string", "minLength": 1},
+    "tokens": {"type": "string", "minLength": 1},
+    "content": {"type": ["string", "null"]},
+    "assets": {"type": ["string", "null"]},
+    "decisions": {"type": "string", "minLength": 1},
+    "activeRegion": {"type": ["string", "null"]},
+    "currentRender": {"type": ["string", "null"]},
+    "diffReport": {"type": ["string", "null"]},
+    "gates": {"type": "object"},
+    "lastPatch": {"type": ["string", "null"]},
+    "status": {"enum": ["observing", "implementing", "converging", "accepted", "unresolved", "blocked"]},
+    "updatedAt": {"type": "string", "minLength": 1}
+  }
+}

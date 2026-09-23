@@ -23,22 +23,27 @@ chmod +x "$fake_python"
 
 sh "$root/scripts/build-packages.sh" >/dev/null
 
-for archive in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops lystar-devops-toolkit-skills; do
+for archive in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops lystar-ui-design lystar-ui-restore lystar-web-restore lystar-devops-toolkit-skills; do
     test -f "$root/dist/$archive.zip"
     unzip -tq "$root/dist/$archive.zip" >/dev/null
 done
 test -f "$root/dist/SHA256SUMS"
 (cd "$root/dist" && sha256sum -c SHA256SUMS >/dev/null)
 
-for archive in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops; do
+for archive in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops lystar-backup-ops lystar-incident-ops lystar-codeup-devops lystar-redis-ops lystar-magicapi-ops lystar-ui-design lystar-ui-restore lystar-web-restore; do
     package="$temp/$archive"
     mkdir -p "$package"
     unzip -q "$root/dist/$archive.zip" -d "$package"
     test -x "$package/install.sh"
-    test -f "$package/runtime/agent-ops/scripts/config_store.py"
-    if [ "$archive" != "lystar-codeup-devops" ] && [ "$archive" != "lystar-redis-ops" ] && [ "$archive" != "lystar-magicapi-ops" ]; then
-        test -f "$package/runtime/agent-ops/scripts/registry_store.py"
-    fi
+    case "$archive" in
+        lystar-ui-design|lystar-ui-restore|lystar-web-restore) ;;
+        *)
+            test -f "$package/runtime/agent-ops/scripts/config_store.py"
+            if [ "$archive" != "lystar-codeup-devops" ] && [ "$archive" != "lystar-redis-ops" ] && [ "$archive" != "lystar-magicapi-ops" ]; then
+                test -f "$package/runtime/agent-ops/scripts/registry_store.py"
+            fi
+            ;;
+    esac
     test -f "$package/runtime/agent-ops/scripts/paths.py"
     test -f "$package/runtime/agent-ops/scripts/migrate.py"
     test -x "$package/bin/lystar-migrate"
@@ -54,6 +59,25 @@ for archive in lystar-db-ops lystar-ssh-ops lystar-host-ops lystar-deploy-ops ly
         test -f "$package/runtime/agent-ops/scripts/magicapi_ops.py"
         test -x "$package/bin/magicx"
         test -f "$package/skills/lystar-magicapi-ops/references/magicapi-contract.md"
+    fi
+    case "$archive" in
+        lystar-ui-design|lystar-ui-restore|lystar-web-restore)
+            test -f "$package/skills/$archive/SKILL.md"
+            test -f "$package/skills/$archive/agents/openai.yaml"
+            test -f "$package/README.md"
+            ;;
+    esac
+    if [ "$archive" = "lystar-ui-restore" ]; then
+        test -f "$package/skills/$archive/scripts/ui_restore.py"
+        test -f "$package/skills/$archive/schemas/config.schema.json"
+        test ! -e "$package/skills/$archive/tests"
+        test -f "$package/requirements/lystar-ui-restore.txt"
+    fi
+    if [ "$archive" = "lystar-web-restore" ]; then
+        test -f "$package/skills/$archive/scripts/build_local_mirror.py"
+        test -f "$package/skills/$archive/references/css-parser.md"
+        test -f "$package/skills/$archive/requirements.txt"
+        test -f "$package/requirements/lystar-web-restore.txt"
     fi
     HOME="$temp/home-$archive" \
     XDG_DATA_HOME="$temp/data-$archive" \
@@ -95,6 +119,14 @@ test ! -e "$temp/home-lystar-redis-ops/.lystar/bin/deployx"
 test -f "$temp/home-lystar-magicapi-ops/.agents/skills/lystar-magicapi-ops/SKILL.md"
 test -x "$temp/home-lystar-magicapi-ops/.lystar/bin/magicx"
 test -f "$temp/home-lystar-magicapi-ops/.lystar/runtime/scripts/magicapi_ops.py"
+for skill in lystar-ui-design lystar-ui-restore lystar-web-restore; do
+    test -f "$temp/home-$skill/.agents/skills/$skill/SKILL.md"
+    test -f "$temp/home-$skill/.agents/skills/$skill/agents/openai.yaml"
+    test ! -e "$temp/home-$skill/.lystar/bin/$skill"
+done
+test -f "$temp/home-lystar-ui-restore/.agents/skills/lystar-ui-restore/scripts/ui_restore.py"
+test -f "$temp/home-lystar-ui-restore/.agents/skills/lystar-ui-restore/schemas/config.schema.json"
+test -f "$temp/home-lystar-web-restore/.agents/skills/lystar-web-restore/scripts/build_local_mirror.py"
 complete="$temp/complete"
 mkdir -p "$complete"
 unzip -q "$root/dist/lystar-devops-toolkit-skills.zip" -d "$complete"
@@ -118,6 +150,12 @@ for skills_home in "$temp/home-complete/.agents/skills"; do
     test -f "$skills_home/lystar-codeup-devops/SKILL.md"
     test -f "$skills_home/lystar-redis-ops/SKILL.md"
     test -f "$skills_home/lystar-magicapi-ops/SKILL.md"
+    test -f "$skills_home/lystar-ui-design/SKILL.md"
+    test -f "$skills_home/lystar-ui-restore/SKILL.md"
+    test -f "$skills_home/lystar-ui-restore/scripts/ui_restore.py"
+    test -f "$skills_home/lystar-ui-restore/schemas/config.schema.json"
+    test -f "$skills_home/lystar-web-restore/SKILL.md"
+    test -f "$skills_home/lystar-web-restore/scripts/build_local_mirror.py"
     test ! -e "$skills_home/lystar-ssh-ops/servers"
 done
 
