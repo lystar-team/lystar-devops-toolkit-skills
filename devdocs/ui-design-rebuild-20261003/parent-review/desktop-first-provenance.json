@@ -1,0 +1,30 @@
+{
+  "session": "2026-10-03T05-03-52-860Z_01a10025-b21c-7591-b283-b56ff116e0f2.jsonl",
+  "method": "Recovered exact first write payloads after execution; this is not a pre-render freeze. The smoke screenshot remains the initial rendering evidence.",
+  "files": [
+    {
+      "file": "index.html",
+      "entry": "7a9f0df9",
+      "timestamp": "2026-10-03T05:09:01.646Z",
+      "source": "first write tool arguments"
+    },
+    {
+      "file": "styles.css",
+      "entry": "17a71c97",
+      "timestamp": "2026-10-03T05:09:25.418Z",
+      "source": "first write tool arguments"
+    },
+    {
+      "file": "app.js",
+      "entry": "0fdde408",
+      "timestamp": "2026-10-03T05:09:47.169Z",
+      "source": "first write tool arguments"
+    },
+    {
+      "file": "test-adapter.js",
+      "entry": "9fa7d796",
+      "timestamp": "2026-10-03T05:09:58.179Z",
+      "source": "first write tool arguments"
+    }
+  ]
+}

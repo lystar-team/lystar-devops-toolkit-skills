@@ -1,6 +1,6 @@
 interface:
   display_name: "LYStar UI Design"
-  short_description: "用 imagegen 建立视觉基准并还原真实可用界面"
-  default_prompt: "Use $lystar-ui-design to derive a visual direction from the real product, generate a focused image reference when warranted, implement it in the existing stack, and validate the rendered interface."
+  short_description: "从业务任务推导路径、信息结构与视觉系统，落实并核对实际 UI/UX 成品"
+  default_prompt: "使用 $lystar-ui-design，从用户任务与业务状态推导信息优先级、页面结构和交互，再建立一致的视觉方向；按要求交付方案或实现，并分别核对任务、视觉与运行结果。"
 policy:
   allow_implicit_invocation: true

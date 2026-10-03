@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>青禾学院图书馆 · 预约原型</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app" id="app">
+  <header class="nav">
+    <button class="nav-back" id="navBack" type="button" aria-label="返回" hidden>
+      <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#chevron-left"></use></svg>
+    </button>
+    <h1 class="nav-title" id="navTitle">青禾学院图书馆</h1>
+    <div class="capsule" aria-hidden="true">
+      <svg class="icon capsule-dots"><use href="assets/icons.svg#ellipsis"></use></svg>
+      <span class="capsule-divider"></span>
+      <svg class="icon capsule-target"><use href="assets/icons.svg#circle"></use></svg>
+    </div>
+  </header>
+
+  <main class="screen" id="screen">
+    <section class="view" id="viewBooks" hidden>
+      <div class="search-bar">
+        <div class="search-field">
+          <svg class="icon search-icon" aria-hidden="true"><use href="assets/icons.svg#search"></use></svg>
+          <input id="bookSearch" type="search" placeholder="搜索书名或作者" aria-label="搜索书名或作者" autocomplete="off" spellcheck="false">
+          <button id="bookSearchClear" class="link-btn" type="button" hidden>清除</button>
+        </div>
+      </div>
+      <ul class="book-list" id="bookList"></ul>
+    </section>
+
+    <section class="view" id="viewBook" hidden>
+      <div id="bookDetail"></div>
+    </section>
+
+    <section class="view" id="viewReservations" hidden>
+      <div class="reader-strip">
+        <span class="reader-name">林予宁</span>
+        <span class="reader-id">R2026032</span>
+      </div>
+      <div id="reservationGroups"></div>
+    </section>
+  </main>
+
+  <nav class="tabbar" id="tabbar" aria-label="主导航">
+    <button class="tab" id="tabBooks" type="button">
+      <span class="tab-icon">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#search"></use></svg>
+      </span>
+      <span class="tab-label">找书</span>
+    </button>
+    <button class="tab" id="tabReservations" type="button">
+      <span class="tab-icon">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#clipboard-list"></use></svg>
+        <span class="tab-badge" id="readyBadge" hidden></span>
+      </span>
+      <span class="tab-label">我的预约</span>
+    </button>
+  </nav>
+
+  <div class="sheet-layer" id="sheetLayer" hidden>
+    <div class="sheet-mask" id="sheetMask"></div>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <h2 class="sheet-title" id="sheetTitle"></h2>
+      <div class="sheet-body" id="sheetBody"></div>
+      <p class="sheet-error" id="sheetError" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button class="btn btn-secondary" id="sheetSecondary" type="button">再想想</button>
+        <button class="btn btn-primary" id="sheetPrimary" type="button">确认</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

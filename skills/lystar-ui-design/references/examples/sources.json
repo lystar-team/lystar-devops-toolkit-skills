@@ -1,0 +1,97 @@
+{
+  "verifiedOn": "2026-10-03",
+  "scope": "原六组八张于 2026-10-02 核验；2026-10-03 新增四组七张 App / 在华小程序画面，共十组十五张。仅原官方 Web 预览执行了对应操作；新增为图库截图或设计方项目图，未做客户端或真机验收。",
+  "cases": [
+    {
+      "id": "cn-ant-query", "name": "Ant Design Pro · 查询与批量操作", "platform": "后台",
+      "source": "https://preview.pro.ant.design/list/table-list/", "type": "live-browser-capture",
+      "viewport": {"width": 1440, "height": 1000},
+      "assets": [
+        {"file": "ant-query.png", "width": 1440, "height": 1000, "state": "default"},
+        {"file": "ant-selection.png", "width": 1440, "height": 1000, "state": "one-row-selected"}
+      ],
+      "measurements": {"bodyFontCssPx": 14, "bodyRowCssPx": 47, "primaryButtonCssPx": 32},
+      "observed": ["筛选与结果分区", "一行选中及对应选择数量", "选择后出现批量操作", "文字与色点表达状态"],
+      "limits": ["演示数据不是业务事实", "不借鉴重复标题、重复选择摘要和装饰背景", "未执行批量业务动作"]
+    },
+    {
+      "id": "cn-arco-query", "name": "Arco Pro · 多条件筛选", "platform": "后台",
+      "source": "https://vue-pro.arco.design/list/search-table", "type": "live-browser-capture",
+      "viewport": {"width": 1440, "height": 1000},
+      "assets": [{"file": "arco-query.png", "width": 1440, "height": 1000, "state": "default"}],
+      "measurements": {"bodyFontCssPx": 14, "bodyRowCssPx": 43, "primaryButtonCssPx": 32},
+      "observed": ["两行筛选网格", "查询与重置共同操作列", "表格工具栏与结果的边界", "行对齐支持扫描"],
+      "limits": ["不迁移随机数据及英文枚举", "未验证所有工具按钮和窄屏行为"]
+    },
+    {
+      "id": "cn-feishu-approval", "name": "飞书审批 · 跨端功能入口", "platform": "企业 App",
+      "source": "https://www.feishu.cn/product/approval", "type": "official-product-illustration",
+      "assets": [{"file": "feishu-approval.webp", "width": 1368, "height": 880, "state": "desktop-and-mobile-entry", "original": "https://p1-hera.feishucdn.com/tos-cn-i-jbbdkfciu3/f8ca42e7e08642a0a1d423089904f6bc~tplv-jbbdkfciu3-image:0:0.image"}],
+      "observed": ["搜索与分类覆盖不同找入口方式", "常用申请前置", "手机纵向分组与底部导航"],
+      "limits": ["公开展示图不是登录客户端实测", "不复制设备框、阴影和项目不存在的能力"]
+    },
+    {
+      "id": "cn-tdesign-publish", "name": "TDesign · 小程序发布与草稿", "platform": "小程序",
+      "source": "https://github.com/TDesignOteam/tdesign-miniprogram-starter", "sourceCommit": "80142f36468c0499a8d0f69b1e7f0c8c695b8662", "type": "official-template-screenshot",
+      "assets": [{"file": "tdesign-publish.png", "width": 750, "height": 1624, "state": "editing", "original": "https://tdesign.gtimg.com/miniprogram/template/publish-1.png"}],
+      "observed": ["图片与输入顺序", "底部草稿与发布的操作权重", "删除附着于图片"],
+      "limits": ["图片像素不是 CSS px 或 rpx", "不推导项目草稿能力、限制或位置权限", "未做开发工具和真机测试"]
+    },
+    {
+      "id": "cn-tdesign-order", "name": "TDesign · 订单列表与详情", "platform": "小程序",
+      "source": "https://github.com/Tencent/tdesign-miniprogram-starter-retail", "sourceCommit": "4280f410121c75775c4b1fd15c3849031f830cd7", "type": "official-template-screenshot",
+      "assets": [
+        {"file": "tdesign-orders.png", "width": 437, "height": 914, "state": "status-list", "original": "https://tdesign.gtimg.com/miniprogram/template/retail/example/v1/order.png"},
+        {"file": "tdesign-order-detail.png", "width": 437, "height": 914, "state": "detail", "original": "https://tdesign.gtimg.com/miniprogram/template/retail/example/v2/order.png"}
+      ],
+      "observed": ["状态页签与对象摘要", "同一订单在详情展开费用和编号", "复制邻近编号"],
+      "limits": ["模拟数据与零售业务不能迁移", "只核对所述列表详情对应项，未校验所有金额", "未进行小程序操作验证"]
+    },
+    {
+      "id": "cn-weui-upload", "name": "WeUI · 上传状态与恢复", "platform": "移动 Web",
+      "source": "https://weui.io/#uploader", "type": "live-browser-capture",
+      "viewport": {"width": 390, "height": 844},
+      "assets": [{"file": "weui-upload.png", "width": 390, "height": 844, "state": "demonstrated-progress-error-delete"}],
+      "observed": ["进度与失败留在对应缩略图", "局部删除入口", "新增与已选图片共同扫描"],
+      "limits": ["多状态演示不是一次真实上传", "不复制示例数量、英文标题和页脚", "未执行上传服务和失败重试"]
+    },
+    {
+      "id": "cn-xiaoyuzhou-discovery", "name": "小宇宙 · 内容发现与持续播放入口", "platform": "App",
+      "source": "https://uinotes.com/app/357289854119870428", "publisher": "UI Notes", "type": "third-party-product-screenshot", "verifiedOn": "2026-10-03",
+      "assets": [
+        {"file": "mobile/podcast-categories.webp", "width": 1170, "height": 2532, "state": "discovery-with-entry-guide", "page": "https://uinotes.com/pin/612313058827440098", "original": "https://uinotes-img.oss-cn-shanghai.aliyuncs.com/image/origin-webp/612313058827440098.webp?v1"},
+        {"file": "mobile/podcast-discovery.webp", "width": 1170, "height": 2532, "state": "editorial-list-with-persistent-player", "page": "https://uinotes.com/pin/592677749782987391", "original": "https://uinotes-img.oss-cn-shanghai.aliyuncs.com/image/origin-webp/592677749782987391.webp?v1"}
+      ],
+      "observed": ["封面、节目名与单集标题的层级", "动作靠近对应单集", "两图的播放条与导航保持位置", "入口引导指向具体功能"],
+      "limits": ["图库保存的版本，不代表现版", "没有客户端操作", "未测辅助文字对比度", "像素不是 CSS 尺寸"]
+    },
+    {
+      "id": "cn-heytea-brand", "name": "喜茶 GO · 品牌首页与手机长内容", "platform": "App",
+      "source": "https://uinotes.com/app/944042831266351099", "publisher": "UI Notes", "type": "third-party-product-screenshot", "verifiedOn": "2026-10-03",
+      "assets": [
+        {"file": "mobile/heytea-home.webp", "width": 1170, "height": 2532, "state": "brand-home", "page": "https://uinotes.com/pin/840196563626603683", "original": "https://uinotes-img.oss-cn-shanghai.aliyuncs.com/image/origin-webp/840196563626603683.webp?v1"},
+        {"file": "mobile/heytea-story.webp", "width": 1170, "height": 2532, "state": "long-form-brand-content", "page": "https://uinotes.com/pin/083935101025451354", "original": "https://uinotes-img.oss-cn-shanghai.aliyuncs.com/image/origin-webp/083935101025451354.webp?v1"}
+      ],
+      "observed": ["照片与手绘建立品牌识别", "取餐方式靠近产品", "暖色纸张与中文长内容的节奏", "展示与阅读使用不同密度"],
+      "limits": ["App 截图，不归为小程序", "没有点餐、外送或返回交互验证", "手绘标题不替代正文", "不复制品牌资产为项目运行素材"]
+    },
+    {
+      "id": "cn-yili-member", "name": "活力伊利 · 会员与消费服务小程序", "platform": "小程序",
+      "source": "https://wellworks.cn/html/cong0dao1-show-1331.html", "publisher": "维好维可", "type": "designer-published-project-board", "verifiedOn": "2026-10-03",
+      "assets": [
+        {"file": "mobile/yili-details.jpg", "width": 3840, "height": 2400, "state": "home-and-brand-services", "original": "https://www.wellworks.cn/api/thumb/2bfd3c8d26c80d5a0d5c5a1f8321fad8.jpg"},
+        {"file": "mobile/yili-activity.jpg", "width": 3840, "height": 2400, "state": "personal-services-and-membership", "original": "https://www.wellworks.cn/api/thumb/8d0628361403c133703050d1011669ca.jpg"}
+      ],
+      "observed": ["购买与运营入口的权重区别", "订单、奶卡、互动的功能分组", "品牌形象贯穿页面", "会员详情展开权益与动作"],
+      "limits": ["设计交付图，不是本机真机截图", "未确认上线与效果", "示例等级、成长值和升级提示不一致，不作为数值规则依据", "运营功能不成为项目默认能力"]
+    },
+    {
+      "id": "cn-hublot-wechat", "name": "宇舶中国 · 微信电商展示与结账", "platform": "小程序",
+      "source": "https://zh.digitalcreative.cn/cases/hublot-wechat-ecommerce", "publisher": "Digital Creative Asia", "type": "designer-published-project-board", "verifiedOn": "2026-10-03",
+      "projectPeriod": "设计方说明项目始于 2020 年，未确认现版",
+      "assets": [{"file": "mobile/hublot-flow.jpg", "width": 2200, "height": 1505, "state": "showcase-product-bag-checkout", "original": "https://staging-assets.digitalcreative.cn/assets/hublot-wechat-ecommerce-china-ui-flow-03.jpg"}],
+      "observed": ["微信导航与中文购物字段", "展示与结账改变密度和工作面", "价格规格与动作靠近商品", "结账按配送、地址、发票和费用分组"],
+      "limits": ["国际品牌的中国市场案例，不称为国产品牌", "静态项目图没有购买与失败验证", "购物袋和结账示例商品组合不同", "订金与转账规则不迁移"]
+    }
+  ]
+}

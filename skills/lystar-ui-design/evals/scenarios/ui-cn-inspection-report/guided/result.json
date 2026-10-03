@@ -1,0 +1,26 @@
+{
+  "scenarioId": "ui-cn-inspection-report",
+  "variant": "guided",
+  "guidanceVersion": "source-worktree:sha256:1d0436014fb281b22c498b4671d7ec00847134e7ba1ff6ee7cb6539f6dae56bf",
+  "inputFingerprint": "sha256:1f6dbf5859c4497bf14a70ee464c4d5c8c7c9572e7f235bf551e3bed00abedc2",
+  "render": {
+    "viewports": ["mobile:390x844", "desktop:1440x1000"],
+    "themes": ["light"],
+    "states": ["abnormal", "draft-restored", "submitting", "error-preserves-input", "success", "long-content", "photo-limit", "required-description"]
+  },
+  "artifacts": {
+    "screenshots": ["mobile-input.png", "mobile-error.png", "mobile-success.png", "desktop-input.png"],
+    "console": "console.txt",
+    "pageErrors": "page-errors.txt"
+  },
+  "review": {
+    "decision": "keep",
+    "findings": [
+      {"category": "runtime", "severity": "note", "message": "26 项实际检查通过；详细断言见 checks.json。参考库入口另完成筛选、放大、Escape、焦点与布局检查。", "ruleId": "ui/evidence/rendered-feedback"},
+      {"category": "touch-target", "severity": "minor", "message": "首次照片删除按钮高 36 px，修正为至少 44 px；首次源码保留于 first-output.html，修正后检查通过。"},
+      {"category": "evidence-scope", "severity": "note", "message": "单组 guided、自评；没有旧版 baseline、盲评或独立模型收益测量。提交是本地模拟，未连接业务 API 或真实上传。"},
+      {"category": "unexecuted", "severity": "note", "message": "库存调拨留出场景、小程序真机、软键盘及全面无障碍审计尚未执行。Web 截图不能替代这些证据。"}
+    ],
+    "reviewer": "parent-session; self-review, not blind evaluation"
+  }
+}

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>园里 · 报修工作台</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="#orders">
+      <span class="brand-mark" data-icon="wrench" data-size="17"></span>
+      <span class="brand-text"><strong>园里</strong><span>园区服务</span></span>
+    </a>
+    <nav class="nav" aria-label="主导航">
+      <a class="nav-item" href="#orders" data-nav="orders">
+        <span class="nav-icon" data-icon="clipboard-list" data-size="18"></span>
+        <span class="nav-label">报修管理</span>
+        <span class="nav-badge" id="nav-pending" hidden aria-hidden="true"></span>
+        <span class="sr-only" id="nav-pending-text"></span>
+      </a>
+      <a class="nav-item" href="#devices" data-nav="devices">
+        <span class="nav-icon" data-icon="boxes" data-size="18"></span>
+        <span class="nav-label">设备档案</span>
+      </a>
+      <a class="nav-item" href="#team" data-nav="team">
+        <span class="nav-icon" data-icon="users" data-size="18"></span>
+        <span class="nav-label">维修人员</span>
+      </a>
+    </nav>
+    <div class="sidebar-foot">
+      <span class="foot-line" data-icon="map-pin" data-size="14"></span>
+      <span class="foot-text">青禾创智园 · 服务中心</span>
+    </div>
+  </aside>
+  <main class="content" id="content" tabindex="-1"></main>
+</div>
+<div id="layer"></div>
+<div class="toast-region" id="toasts" role="status" aria-live="polite"></div>
+<script src="../shared/store.js"></script>
+<script src="../shared/icons.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

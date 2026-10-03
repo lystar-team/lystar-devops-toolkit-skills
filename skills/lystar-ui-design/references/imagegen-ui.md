@@ -1,50 +1,31 @@
-# Imagegen UI 提示词
+# 视觉资产与生成参考
 
-只在 `lystar-ui-design` 已决定需要图像生成时读取。每次调用只生成一种资产。
+仅在当前任务确实需要图像、纹理、插图或视觉探索时读取。任务、结构与明确边界沿用 [SKILL.md](../SKILL.md) 和本次设计记录，不另填第二份产品合同。
 
-## 页面 Mockup
+## 先决定资产职责
 
-```text
-Use case: production UI mockup for code implementation
-Asset type: full-page [desktop/mobile] interface reference
-Primary request: design [page and core task]
-Input images: [current screenshot/user reference and its role]
-Product and audience: [real product, role, frequency]
-Real content: [exact sections, labels, data types, primary actions]
-Visual direction: [product character, density, typography, color discipline]
-Signature element: [one identifiable treatment]
-Composition/framing: [viewport, grid, navigation, content priority]
-Components and states: [real controls and required states]
-Constraints: preserve [business structure/brand/interaction]; implementation-ready; readable text hierarchy
-Avoid: invented features or metrics, decorative card grids, generic AI gradients, illegible text, device frames, watermarks
-```
+优先真实品牌素材、已有图片与可编辑的 SVG / 原生结构。照片或插图帮助理解对象、建立主题或表达品牌时可以生成；表格、表单和布局能直接实现时，不为“做设计”固定生一张效果图。图像任务与生成模型的执行要求以当前环境可用工具为准，不要求普通 UI 必须有该能力。
 
-## UI Kit 视觉板
+生成图只提供资产或视觉参考，不提供业务事实、组件 API、权限、金额和状态。UI mockup 不能冒充运行页面，组件板不能替代可交互组件；高保真文字与关系仍在项目实现中校准。
+
+## 提示词包含必要输入
 
 ```text
-Use case: visual UI Kit reference for implementation
-Asset type: organized component and token board, not a marketing poster
-Primary request: show typography roles, color roles, spacing rhythm, buttons, inputs, selects, tables/cards where relevant, navigation, feedback and empty/loading/error/disabled states
-Product context: [type and users]
-Visual direction: [same as approved page mockup]
-Composition: neutral labeled board with stable rows and columns
-Constraints: components needed by the current product only; consistent geometry and state differences
-Avoid: fake brand copy, device mockups, decorative showcases, components outside scope
+用途：放在哪个位置，帮助用户理解什么或建立什么主题。
+资产：照片 / 插图 / 材质 / 视觉参考；不要混为整页运行成品。
+主体与内容：给定对象、材料和需保持的身份/品牌约束。
+视觉关系：已选构图、色彩、媒介、界面留白与裁切。
+平台与画布：目标显示尺寸、比例、桌面/手机变化。
+保持与避免：本次明确内容及视觉边界，禁止虚构标志、功能、数字和文案。
+参考：实际使用的图像及其角色，不把未看过的作品写成参考。
 ```
 
-## 插图或纹理资产
+仅需要某个主体或背景时，不让生成图自带按钮、文案、设备框和假 UI。需要精确文字、布局或身份保持时选择环境提供的精度模式；模型名称与工具是否成功按实际记录，不自行声称已使用。
 
-```text
-Use case: runtime asset for [exact location]
-Asset type: [illustration/texture/hero image]
-Primary request: [subject and purpose]
-Style/medium: [match approved interface]
-Composition/framing: [aspect ratio, crop, negative space]
-Lighting/mood: [specific]
-Constraints: no embedded UI, no logos, no text unless verbatim text is supplied
-Avoid: watermarks, stock-photo look, unrelated objects, details that fail at final size
-```
+## 进入项目与检查
 
-## 回读
+生成后核对主体、构图、字样、品牌标志、无依据元素与本次边界。实际运行资产复制到项目正式路径，按最终显示尺寸检查分辨率、裁切、文字干扰和必要替代版式；缩略图好看不证明页面成立。
 
-每张结果检查：产品语境、构图、状态、文字干扰、禁用内容和最终尺寸。只针对一个明确问题迭代一次。
+保留生成所需的实际 prompt、工具配置、参考角色、产物路径与用途，不给无生图需求的普通后台添加“未生图”流程说明。工具失败就说明缺失资产与可完成部分，不能把 prompt 或预期路径写成生成成功。
+
+最终仍在真实页面核对整体比例、主次与任务，不能用生成效果图替代运行、返回、提交或状态证据。

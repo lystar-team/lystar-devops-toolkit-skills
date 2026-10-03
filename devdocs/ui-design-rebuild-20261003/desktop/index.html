@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>调拨核对 DB20261003018</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="page">
+  <header class="page-head">
+    <div class="title-line">
+      <h1>调拨核对</h1>
+      <span class="state state--pending"><span class="state-dot" aria-hidden="true"></span>待核对</span>
+    </div>
+
+    <div class="head-row">
+      <div class="route">
+        <div class="route-node">
+          <span class="route-role">调出仓库</span>
+          <span class="route-name">北区设备耗材仓</span>
+        </div>
+        <svg class="icon route-arrow" aria-hidden="true"><use href="assets/icons.svg#arrow-right"></use></svg>
+        <div class="route-node">
+          <span class="route-role">调入仓库</span>
+          <span class="route-name">南区实验室备件仓</span>
+        </div>
+      </div>
+
+      <dl class="meta">
+        <div class="meta-item">
+          <dt>单号</dt>
+          <dd>DB20261003018</dd>
+        </div>
+        <div class="meta-item">
+          <dt>创建时间</dt>
+          <dd>2026-10-03 09:30</dd>
+        </div>
+        <div class="meta-item">
+          <dt>经办人</dt>
+          <dd>许知夏</dd>
+        </div>
+      </dl>
+    </div>
+  </header>
+
+  <div class="work">
+    <section class="compare-area" aria-label="调出与调入记录对照">
+      <div class="toolbar">
+        <div class="search">
+          <svg class="icon search-icon" aria-hidden="true"><use href="assets/icons.svg#search"></use></svg>
+          <input id="searchInput" type="search" placeholder="查找物料名称或编号" aria-label="查找本次调拨中的物料" autocomplete="off" spellcheck="false">
+          <button id="clearSearch" class="link-btn" type="button" hidden>清除</button>
+        </div>
+        <p class="summary" id="summary"></p>
+      </div>
+
+      <div class="table-wrap">
+        <table class="compare-table">
+          <caption class="sr-only">调出记录与调入记录逐项对照</caption>
+          <thead>
+            <tr>
+              <th scope="col" class="col-material">物料</th>
+              <th scope="col" class="col-unit num">单位</th>
+              <th scope="col" class="col-qty num">调出数量</th>
+              <th scope="col" class="col-qty num">调入数量</th>
+              <th scope="col" class="col-diff num">差异</th>
+            </tr>
+          </thead>
+          <tbody id="compareRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <aside class="note-panel" aria-labelledby="noteHeading">
+      <div class="note-head">
+        <h2 id="noteHeading">调拨说明</h2>
+        <span class="note-feedback" id="noteFeedback" aria-live="polite"></span>
+        <button id="editNoteBtn" class="btn btn-secondary" type="button">编辑说明</button>
+      </div>
+
+      <p class="note-view" id="noteView"></p>
+
+      <form class="note-form" id="noteForm" hidden>
+        <label class="sr-only" for="noteInput">调拨说明内容，最多 1000 字</label>
+        <textarea id="noteInput" maxlength="1000" aria-describedby="noteCounter noteError" spellcheck="false"></textarea>
+        <div class="note-meta">
+          <span class="note-error" id="noteError" role="alert" hidden></span>
+          <span class="note-counter" id="noteCounter">0 / 1000</span>
+        </div>
+        <div class="note-actions">
+          <button id="cancelNoteBtn" class="btn btn-secondary" type="button">返回</button>
+          <button id="saveNoteBtn" class="btn btn-primary" type="submit">保存说明</button>
+        </div>
+      </form>
+    </aside>
+  </div>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

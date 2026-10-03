@@ -17,7 +17,7 @@ description: 从任意公开网页、组件预览、iframe、Bundle、CSS、源�
 - SVG、CSS 动效、部分 Canvas/WebGL/3D/Rive/Lottie 页面；
 - v0、21st.dev 等有明确公开入口的特殊平台。
 
-只给截图、没有公开页面地址时，交给 `lystar-ui-design`。桌面应用、登录后页面、被阻断资源和只能运行不能读取的画面要如实标记，不强行生成完整 HTML/CSS。
+只给截图或设计稿、没有公开页面地址时，交给 `lystar-ui-restore`。需要根据需求重新设计界面时使用 `lystar-ui-design`。桌面应用、登录后页面、被阻断资源和只能运行不能读取的画面要如实标记，不强行生成完整 HTML/CSS。
 
 ## 先记住五件事
 

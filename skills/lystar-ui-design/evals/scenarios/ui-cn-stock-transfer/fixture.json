@@ -1,0 +1,10 @@
+{
+  "id": "ui-cn-stock-transfer",
+  "label": "库存调拨：桌面对照与手机逐项核对",
+  "prompt": "设计仓库人员核对库存调拨的页面。用户必须同时核对调出仓和调入仓的物料、规格、单位、数量与差异，并保存调拨说明；长说明按独立编辑处理，取消不能改变已保存内容。桌面支持对照，390宽保留逐项核对和返回位置。已有项目组件与字段不可更换。提供可运行结果及所涉及的状态证据。",
+  "input": {"providedOnExecution": ["获准项目页面与组件", "真实或已给定的调拨字段", "两仓数据", "既有验证入口"]},
+  "render": {"viewports": [{"name": "desktop", "width": 1440, "height": 1000}, {"name": "mobile", "width": 390, "height": 844}], "themes": ["light"], "states": ["comparison", "editing", "cancel", "submit-error", "long-content"]},
+  "rubric": ["同时比较关系", "编辑与取消", "手机核对顺序", "真实内容与运行证据"],
+  "knownFailures": [],
+  "holdout": true
+}

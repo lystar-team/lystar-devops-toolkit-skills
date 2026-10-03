@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>国内 UI/UX 图文正例</title>
+<style>
+:root{color-scheme:light;--ink:#20252b;--muted:#58616c;--line:#dce1e7;--accent:#185bc3;--paper:#fff;--bg:#f5f6f8}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,"PingFang SC","Microsoft YaHei",sans-serif}main{max-width:1320px;margin:auto;padding:40px 32px}h1{font-size:30px;line-height:1.3;margin:8px 0 16px}h2{font-size:21px;line-height:1.4;margin:0 0 6px}h3{font-size:15px;margin:18px 0 4px}p{margin:0 0 12px}.intro{max-width:870px}.meta,.note{color:var(--muted);font-size:13px}nav{display:flex;flex-wrap:wrap;gap:8px;margin:24px 0 32px}button{font:inherit;cursor:pointer;border:1px solid #b9c3d0;border-radius:4px;background:white;color:var(--ink);min-height:40px;padding:7px 16px}nav button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:white}a{color:var(--accent);text-underline-offset:3px}button:focus-visible,a:focus-visible{outline:3px solid #277be1;outline-offset:3px}.case{padding:28px 0;border-top:1px solid var(--line)}.case[hidden]{display:none}.case-body{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(290px,1fr);gap:28px;margin-top:20px}.images{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;min-width:0}.images a{display:block;flex:1 1 300px;background:var(--paper);border:1px solid var(--line);padding:10px}.images img{display:block;max-width:100%;width:100%;height:auto}.images.phone a{flex:0 1 235px}.images.phone img{max-height:540px;object-fit:contain}.detail{padding:0 6px}.detail ul{margin:6px 0 14px;padding-left:20px}.source{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}footer{border-top:1px solid var(--line);padding:24px 0;margin-top:20px}dialog{border:0;border-radius:4px;padding:18px;max-width:95vw;max-height:94vh;background:white}dialog::backdrop{background:#101820c7}dialog img{display:block;max-width:calc(95vw - 36px);max-height:calc(94vh - 85px);object-fit:contain}dialog .bar{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:12px}dialog p{margin:0;font-size:13px}@media(max-width:760px){main{padding:24px 18px}h1{font-size:25px}.case-body{grid-template-columns:1fr;gap:14px}.images.phone a{flex:1 1 140px}.images.phone img{max-height:470px}.detail{padding:0}button{min-height:44px}}
+</style>
+</head>
+<body>
+<main>
+<header class="intro">
+<p class="meta">LYStar UI Design · 移动案例补充核验于 2026-10-03</p>
+<h1>国内 UI/UX 图文正例</h1>
+<p>十组真实来源、十五张画面。先看内容与品牌 App、消费端小程序，再按任务选择后台与组件参考。每组说明可取之处与迁移边界。</p>
+<p class="note">图片保持原始画面；点击可放大或打开原图。项目展示与图库截图不等于本机交互验收。详细依据见 <a href="../mobile-product-examples.md">移动产品说明</a>、<a href="../domestic-ui-examples.md">后台与组件说明</a>及 <a href="sources.json">来源记录</a>。</p>
+</header>
+<nav aria-label="按产品环境筛选">
+<button type="button" data-filter="all" aria-pressed="true">全部</button><button type="button" data-filter="App" aria-pressed="false">App</button><button type="button" data-filter="小程序" aria-pressed="false">小程序</button><button type="button" data-filter="后台" aria-pressed="false">后台</button><button type="button" data-filter="企业 App" aria-pressed="false">企业 App</button><button type="button" data-filter="移动 Web" aria-pressed="false">移动 Web</button>
+</nav>
+<p id="count" class="meta" role="status">显示 10 组参考</p>
+<section class="case" data-kind="App" id="cn-xiaoyuzhou-discovery">
+<h2>小宇宙 · 内容发现与持续播放入口</h2><p class="meta">UI Notes 产品截图 · 每张 1170 × 2532 图像像素 · 非本机客户端实测</p>
+<div class="case-body"><div class="images phone"><a href="mobile/podcast-categories.webp" data-zoom><img src="mobile/podcast-categories.webp" width="1170" height="2532" alt="小宇宙的分类、推荐内容、入口引导与底部播放条"></a><a href="mobile/podcast-discovery.webp" data-zoom><img src="mobile/podcast-discovery.webp" width="1170" height="2532" loading="lazy" alt="小宇宙编辑精选中的封面、单集标题、播放动作与常驻控制"></a></div><div class="detail">
+<h3>值得学</h3><p>封面、节目名、单集标题和摘要分层，播放靠近单集。浏览内容与当前播放控制同时可见，入口与导航各有位置。</p>
+<h3>视觉判断</h3><p>用内容与排版建立主要层级，浅蓝表达入口和控制。持续任务与列表内容可以并存，需要项目已有对应能力。</p>
+<h3>迁移边界</h3><p>没有验证连续播放或引导关闭；浅灰文字对比度未实测。截图属于保存版本，不代表最新版。</p><p class="source"><a href="https://uinotes.com/app/357289854119870428">截图来源</a><span class="note">cn-xiaoyuzhou-discovery</span></p></div></div>
+</section>
+<section class="case" data-kind="App" id="cn-heytea-brand">
+<h2>喜茶 GO · 品牌首页与手机长内容</h2><p class="meta">UI Notes 产品截图 · 每张 1170 × 2532 图像像素 · App 界面</p>
+<div class="case-body"><div class="images phone"><a href="mobile/heytea-home.webp" data-zoom><img src="mobile/heytea-home.webp" width="1170" height="2532" loading="lazy" alt="喜茶 GO 首页的产品照片、手绘中文标题及取餐入口"></a><a href="mobile/heytea-story.webp" data-zoom><img src="mobile/heytea-story.webp" width="1170" height="2532" loading="lazy" alt="喜茶 GO 长内容中的暖色纸张、照片组合与中文段落"></a></div><div class="detail">
+<h3>值得学</h3><p>同一品牌按任务改变节奏：首页突出产品与取餐入口，长内容用照片、材料和段落组织阅读。</p>
+<h3>视觉判断</h3><p>品牌识别来自照片、手绘字形与纸张材料。真实内容能支持这些选择时使用，操作正文保持可读。</p>
+<h3>迁移边界</h3><p>这里研究品牌展示与阅读，没有点餐、外送或返回交互验证；大字与大图不成为审批和填报的默认布局。</p><p class="source"><a href="https://uinotes.com/app/944042831266351099">截图来源</a><span class="note">cn-heytea-brand</span></p></div></div>
+</section>
+<section class="case" data-kind="小程序" id="cn-yili-member">
+<h2>活力伊利 · 会员与消费服务小程序</h2><p class="meta">维好维可项目展示 · 每张 3840 × 2400 图像像素 · 含微信导航</p>
+<div class="case-body"><div class="images"><a href="mobile/yili-details.jpg" data-zoom><img src="mobile/yili-details.jpg" width="3840" height="2400" loading="lazy" alt="活力伊利的购买入口、品牌馆和奶卡服务展示"></a><a href="mobile/yili-activity.jpg" data-zoom><img src="mobile/yili-activity.jpg" width="3840" height="2400" loading="lazy" alt="活力伊利的订单、奶卡、互动分组与会员权益详情"></a></div><div class="detail">
+<h3>值得学</h3><p>高频购买入口与次级运营入口分层，个人页按服务分组，详情展开权益和动作。品牌形象与功能识别共同呈现。</p>
+<h3>视觉判断</h3><p>图形、卡片与颜色有品牌和分组用途；会员状态保留文字。运营内容较多，快速办理场景需要调整优先级。</p>
+<h3>发现与边界</h3><p>示例等级、成长值和升级提示不一致，只借鉴所述视觉与组织。项目图不证明上线效果、会员数值规则或真机交互。</p><p class="source"><a href="https://wellworks.cn/html/cong0dao1-show-1331.html">设计方案例</a><span class="note">cn-yili-member</span></p></div></div>
+</section>
+<section class="case" data-kind="小程序" id="cn-hublot-wechat">
+<h2>宇舶中国 · 微信展示、选品与结账</h2><p class="meta">Digital Creative Asia 项目展示 · 2200 × 1505 图像像素 · 在华微信产品</p>
+<div class="case-body"><div class="images"><a href="mobile/hublot-flow.jpg" data-zoom><img src="mobile/hublot-flow.jpg" width="2200" height="1505" loading="lazy" alt="宇舶在华小程序的品牌展示、商品详情、购物袋与中文结账分组"></a></div><div class="detail">
+<h3>值得学</h3><p>展示页强调产品图，购物袋与结账切换到更明确的白色工作面。商品、价格、规格和动作靠近，结账分组清楚。</p>
+<h3>视觉判断</h3><p>同一品牌随任务改变密度和表现强度。国际品牌在中国市场的微信适配可以提供平台依据，品牌样式按项目判断。</p>
+<h3>迁移边界</h3><p>项目始于 2020 年，不称为现版。多屏商品组合不同；订金、转账和购买结果未验证，不推导本项目规则。</p><p class="source"><a href="https://zh.digitalcreative.cn/cases/hublot-wechat-ecommerce">设计方案例</a><span class="note">cn-hublot-wechat</span></p></div></div>
+</section>
+<section class="case" data-kind="后台" id="cn-ant-query">
+<h2>Ant Design Pro · 查询与批量操作</h2><p class="meta">浏览器捕获 · 1440 × 1000 · 默认与一行选中</p>
+<div class="case-body"><div class="images"><a href="ant-query.png" data-zoom><img src="ant-query.png" width="1440" height="1000" alt="Ant Design Pro 的筛选区、表格和行内操作"></a><a href="ant-selection.png" data-zoom><img src="ant-selection.png" width="1440" height="1000" loading="lazy" alt="选择一行后显示对应数量与批量操作"></a></div><div class="detail">
+<h3>值得学</h3><p>筛选、结果和行操作分工明确。选择后才出现批量动作，状态使用文字加色点，横向对齐支持比较。</p>
+<h3>实测参数</h3><p>表格正文 14 CSS px，数据行 47 CSS px，主按钮高 32 CSS px。以项目 token 和真实长度调整。</p>
+<h3>迁移边界</h3><p>不复制随机数据、1970 年日期、重复摘要、装饰背景或配置浮钮；没有执行批量审批业务。</p><p class="source"><a href="https://preview.pro.ant.design/list/table-list/">官方预览</a><span class="note">cn-ant-query</span></p></div></div>
+</section>
+<section class="case" data-kind="后台" id="cn-arco-query">
+<h2>Arco Pro · 多条件筛选</h2><p class="meta">浏览器捕获 · 1440 × 1000</p>
+<div class="case-body"><div class="images"><a href="arco-query.png" data-zoom><img src="arco-query.png" width="1440" height="1000" loading="lazy" alt="Arco Pro 两行筛选网格、列表工具栏和连续表格"></a></div><div class="detail">
+<h3>值得学</h3><p>两行筛选共用查询/重置操作列，工具栏与结果通过间距和分隔线分区，字段与操作保持稳定位置。</p>
+<h3>实测参数</h3><p>表格正文 14 CSS px，数据行 43 CSS px，主按钮高 32 CSS px。与 Ant 的差异说明密度需要内容依据。</p>
+<h3>迁移边界</h3><p>不复制英文枚举、随机名称、1988 年日期；没有验证全部工具按钮与窄屏流程。</p><p class="source"><a href="https://vue-pro.arco.design/list/search-table">官方预览</a><span class="note">cn-arco-query</span></p></div></div>
+</section>
+<section class="case" data-kind="企业 App" id="cn-feishu-approval">
+<h2>飞书审批 · 跨端功能入口</h2><p class="meta">官方产品展示图 · 桌面与手机 · 1368 × 880 图像像素</p>
+<div class="case-body"><div class="images"><a href="feishu-approval.webp" data-zoom><img src="feishu-approval.webp" width="1368" height="880" loading="lazy" alt="飞书审批的搜索、分类、常用申请及手机纵向分组"></a></div><div class="detail">
+<h3>值得学</h3><p>搜索、分类和常用申请覆盖不同找入口方式。桌面多列、手机纵向，保留导航与主要路径。</p>
+<h3>为什么保留图标和卡片</h3><p>图标表达功能类别，卡片表达入口集合边界。按用途判断，不能只因外形像常见 AI 生成页面就删除。</p>
+<h3>迁移边界</h3><p>功能入口模式不适合替代审批队列；设备框与展示阴影不进入工作台。这不是本机登录客户端的实测。</p><p class="source"><a href="https://www.feishu.cn/product/approval">官方产品页</a><span class="note">cn-feishu-approval</span></p></div></div>
+</section>
+<section class="case" data-kind="小程序" id="cn-tdesign-publish">
+<h2>TDesign · 小程序发布与草稿</h2><p class="meta">官方模板截图 · 750 × 1624 图像像素</p>
+<div class="case-body"><div class="images phone"><a href="tdesign-publish.png" data-zoom><img src="tdesign-publish.png" width="750" height="1624" loading="lazy" alt="小程序图片、描述、标签、位置和底部存草稿与发布"></a></div><div class="detail">
+<h3>值得学</h3><p>按输入顺序安排内容，描述获得主要空间，删除附着于图片。底部草稿与发布以权重区分结果。</p>
+<h3>迁移判断</h3><p>先确认项目已有草稿能力、上传限制和位置字段，再决定控件；底部操作避开安全区和键盘。</p>
+<h3>迁移边界</h3><p>不复制标签、500 字限制或业务字段。图像像素不是 CSS px / rpx；没有真机与弱网验收。</p><p class="source"><a href="https://github.com/TDesignOteam/tdesign-miniprogram-starter">官方模板</a><span class="note">cn-tdesign-publish</span></p></div></div>
+</section>
+<section class="case" data-kind="小程序" id="cn-tdesign-order">
+<h2>TDesign · 订单列表与详情</h2><p class="meta">官方零售模板截图 · 两张 437 × 914 图像</p>
+<div class="case-body"><div class="images phone"><a href="tdesign-orders.png" data-zoom><img src="tdesign-orders.png" width="437" height="914" loading="lazy" alt="订单状态页签、对象摘要、实付与当前可做操作"></a><a href="tdesign-order-detail.png" data-zoom><img src="tdesign-order-detail.png" width="437" height="914" loading="lazy" alt="同一订单详情展开地址、费用、编号和复制入口"></a></div><div class="detail">
+<h3>值得学</h3><p>列表保留摘要和当前动作，详情再展开费用和追溯字段。复制紧邻编号，卡片边界对应订单对象。</p>
+<h3>对应关系</h3><p>两图显示相同订单编号与 0.20 元示例实付；图中其他订单的费用没有独立核验。</p>
+<h3>迁移边界</h3><p>不迁移零售红色主题、模拟金额、支付时限或按钮；状态动作由本项目业务决定。没有小程序交互验收。</p><p class="source"><a href="https://github.com/Tencent/tdesign-miniprogram-starter-retail">官方模板</a><span class="note">cn-tdesign-order</span></p></div></div>
+</section>
+<section class="case" data-kind="移动 Web" id="cn-weui-upload">
+<h2>WeUI · 上传状态与恢复</h2><p class="meta">浏览器捕获 · 390 × 844 · 进度、错误与删除示例</p>
+<div class="case-body"><div class="images phone"><a href="weui-upload.png" data-zoom><img src="weui-upload.png" width="390" height="844" loading="lazy" alt="WeUI 缩略图中的进度、错误标记和删除入口"></a></div><div class="detail">
+<h3>值得学</h3><p>状态留在受影响对象上。失败图片保留位置，进度与删除有局部归属，用户无需重新寻找附件。</p>
+<h3>迁移判断</h3><p>独立附件状态与真实已选数量进入项目组件，提供重试、删除、可访问名称与触控热区。</p>
+<h3>迁移边界</h3><p>3/10 和 50% 是状态演示，不能作为真实计数；不复制英文标题和页脚。没有真实上传服务验证。</p><p class="source"><a href="https://weui.io/#uploader">官方演示</a><span class="note">cn-weui-upload</span></p></div></div>
+</section>
+<footer><p>这些画面为具体任务提供正向依据。已有项目参考优先；认可一个案例，也不表示它的所有颜色、数据和能力都应迁移。</p><p class="note">当前尚未完成旧版/新版盲评与小程序真机验证。图文参考的真实性、具体设计优点和当前项目的完成证据分别判断。</p></footer>
+</main>
+<dialog id="zoom" aria-label="查看参考原图"><div class="bar"><p id="caption"></p><a id="original-link" target="_blank" rel="noopener">打开原图</a><button type="button" id="close">关闭原图</button></div><img id="zoom-image" alt=""></dialog>
+<script>
+const cases=[...document.querySelectorAll('.case')],filters=[...document.querySelectorAll('[data-filter]')],count=document.getElementById('count');
+filters.forEach(button=>button.addEventListener('click',()=>{filters.forEach(x=>x.setAttribute('aria-pressed',String(x===button)));cases.forEach(x=>x.hidden=button.dataset.filter!=='all'&&x.dataset.kind!==button.dataset.filter);count.textContent=`显示 ${cases.filter(x=>!x.hidden).length} 组参考`;}));
+const dialog=document.getElementById('zoom'),image=document.getElementById('zoom-image');let opener;
+document.querySelectorAll('[data-zoom]').forEach(link=>link.addEventListener('click',event=>{if(!dialog.showModal)return;event.preventDefault();opener=link;image.src=link.href;image.alt=link.querySelector('img').alt;document.getElementById('original-link').href=link.href;document.getElementById('caption').textContent=image.alt;dialog.showModal();}));
+document.getElementById('close').addEventListener('click',()=>dialog.close());dialog.addEventListener('close',()=>opener?.focus());
+</script>
+</body>
+</html>

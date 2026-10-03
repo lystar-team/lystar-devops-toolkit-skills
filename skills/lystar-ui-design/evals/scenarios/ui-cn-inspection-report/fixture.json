@@ -1,0 +1,23 @@
+{
+  "id": "ui-cn-inspection-report",
+  "label": "中文移动巡检记录：输入、草稿和失败恢复",
+  "prompt": "为工厂现场工程师实现可运行的巡检记录 Web 样例。设备与位置由输入提供。填写巡检结果（正常/异常）；异常时填写问题说明，最多300字；最多附3张图片。支持存草稿，提交失败保留输入且可重试，提交中防止重复操作，成功后查看提交结果。使用给定的中文设备名称与长问题说明检查390和1440宽。不要连接真实业务系统，提交适配器第一次失败、重试成功。记录参考观察、设计参数和实际验证证据。",
+  "artifact": "guided/index.html",
+  "input": {
+    "deviceNumber": "SB-024",
+    "deviceName": "液压成型机冷却循环与高压密封组件",
+    "location": "三号车间 · 二号生产线",
+    "longDescription": "停机检查时发现冷却循环管路连接处持续渗漏，设备运行后压力恢复缓慢。已清理积液并保留现场，需维修人员复核高压密封组件和回水接头。",
+    "limits": {"descriptionCharacters": 300, "photos": 3},
+    "submission": "local-fail-once-adapter"
+  },
+  "generation": {"agent": "parent-session", "model": "current-harness-model", "settings": {"comparison": "single-guided-run; no baseline or blind evaluation"}},
+  "render": {
+    "viewports": [{"name": "mobile", "width": 390, "height": 844}, {"name": "desktop", "width": 1440, "height": 1000}],
+    "themes": ["light"],
+    "states": ["default", "abnormal", "draft-restored", "submitting", "error-preserves-input", "success", "long-content"]
+  },
+  "rubric": ["任务与状态", "中文内容韧性", "参考到参数的映射", "运行与交互证据"],
+  "knownFailures": [],
+  "holdout": false
+}

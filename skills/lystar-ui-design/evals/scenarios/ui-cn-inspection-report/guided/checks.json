@@ -1,0 +1,161 @@
+{
+  "scope": "local Web sample; no real API or miniprogram device",
+  "checks": [
+    {
+      "check": "draft-description-restored",
+      "actual": "停机检查时发现冷却循环管路连接处持续渗漏，设备运行后压力恢复缓慢。已清理积液并保留现场，需维修人员复核高压密封组件和回水接头。",
+      "expected": "停机检查时发现冷却循环管路连接处持续渗漏，设备运行后压力恢复缓慢。已清理积液并保留现场，需维修人员复核高压密封组件和回水接头。",
+      "passed": true
+    },
+    {
+      "check": "draft-result-restored",
+      "actual": "abnormal",
+      "expected": "abnormal",
+      "passed": true
+    },
+    {
+      "check": "draft-feedback",
+      "actual": "已恢复草稿。",
+      "expected": "已恢复草稿。",
+      "passed": true
+    },
+    {
+      "check": "mobile-no-horizontal-overflow",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "over-limit-keeps-zero-photos",
+      "actual": "0",
+      "expected": "0",
+      "passed": true
+    },
+    {
+      "check": "over-limit-feedback",
+      "actual": "最多添加 3 张照片，请重新选择。",
+      "expected": "最多添加 3 张照片，请重新选择。",
+      "passed": true
+    },
+    {
+      "check": "three-photo-count",
+      "actual": "3",
+      "expected": "3",
+      "passed": true
+    },
+    {
+      "check": "delete-touch-target-at-least-44",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "delete-updates-count",
+      "actual": "2",
+      "expected": "2",
+      "passed": true
+    },
+    {
+      "check": "draft-photo-restoration-help",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "submitting-disables-submit",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "submitting-blocks-form-interaction",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "failure-keeps-description",
+      "actual": "停机检查时发现冷却循环管路连接处持续渗漏，设备运行后压力恢复缓慢。已清理积液并保留现场，需维修人员复核高压密封组件和回水接头。",
+      "expected": "停机检查时发现冷却循环管路连接处持续渗漏，设备运行后压力恢复缓慢。已清理积液并保留现场，需维修人员复核高压密封组件和回水接头。",
+      "passed": true
+    },
+    {
+      "check": "failure-keeps-photos",
+      "actual": "2",
+      "expected": "2",
+      "passed": true
+    },
+    {
+      "check": "failure-enables-retry",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "retry-reaches-success",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "success-shows-same-description",
+      "actual": "停机检查时发现冷却循环管路连接处持续渗漏，设备运行后压力恢复缓慢。已清理积液并保留现场，需维修人员复核高压密封组件和回水接头。",
+      "expected": "停机检查时发现冷却循环管路连接处持续渗漏，设备运行后压力恢复缓慢。已清理积液并保留现场，需维修人员复核高压密封组件和回水接头。",
+      "passed": true
+    },
+    {
+      "check": "success-shows-same-photo-count",
+      "actual": "2 张",
+      "expected": "2 张",
+      "passed": true
+    },
+    {
+      "check": "success-focus",
+      "actual": "success",
+      "expected": "success",
+      "passed": true
+    },
+    {
+      "check": "successful-submission-clears-draft",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "required-description-feedback",
+      "actual": "请填写问题说明。",
+      "expected": "请填写问题说明。",
+      "passed": true
+    },
+    {
+      "check": "required-description-focus",
+      "actual": "description",
+      "expected": "description",
+      "passed": true
+    },
+    {
+      "check": "required-description-invalid-state",
+      "actual": "true",
+      "expected": "true",
+      "passed": true
+    },
+    {
+      "check": "desktop-no-horizontal-overflow",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "check": "console-empty",
+      "actual": "",
+      "expected": "",
+      "passed": true
+    },
+    {
+      "check": "page-errors-empty",
+      "actual": "",
+      "expected": "",
+      "passed": true
+    }
+  ]
+}
