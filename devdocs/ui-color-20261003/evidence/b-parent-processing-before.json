@@ -1,0 +1,17 @@
+{
+  "passes": false,
+  "pairs": [
+    {
+      "name": "dark processing/action-as-text",
+      "ratio": 2.9369,
+      "minimum": 4.5,
+      "passes": false
+    },
+    {
+      "name": "dark processing/link-as-text",
+      "ratio": 5.773,
+      "minimum": 4.5,
+      "passes": true
+    }
+  ]
+}

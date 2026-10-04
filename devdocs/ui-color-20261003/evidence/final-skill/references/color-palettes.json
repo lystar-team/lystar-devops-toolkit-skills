@@ -1,0 +1,38 @@
+{
+  "td-light": {
+    "source": "Tencent/tdesign-common@0c9b38898608d9f558d4e85a38843bd85db241e8 style/web/theme/_light.less",
+    "adaptation": "可读辅助文字用font-gray-2；白字操作底用brand-7/8/9；状态文字用更深的同色阶；输入边界用gray-8。不是官方完整主题或组件替代品。",
+    "tokens": {
+      "page": "#eeeeee", "surface": "#ffffff", "surface-subtle": "#f3f3f3", "surface-hover": "#f3f3f3",
+      "text": "rgba(0, 0, 0, 0.90)", "text-secondary": "rgba(0, 0, 0, 0.60)", "text-disabled": "rgba(0, 0, 0, 0.26)",
+      "brand": "#0052d9", "action": "#0052d9", "action-hover": "#003cab", "action-active": "#002a7c", "on-action": "#ffffff",
+      "action-disabled": "#e8e8e8", "link": "#003cab", "selected": "#f2f3ff", "on-selected": "#003cab",
+      "border": "#dddddd", "control-border": "#777777", "focus": "#0052d9",
+      "info-text": "#003cab", "info-bg": "#f2f3ff", "success-text": "#006c45", "success-bg": "#e3f9e9", "warning-text": "#954500", "warning-bg": "#fff1e9", "error-text": "#ad352f", "error-bg": "#fff0ed"
+    }
+  },
+  "td-dark": {
+    "source": "Tencent/tdesign-common@0c9b38898608d9f558d4e85a38843bd85db241e8 style/web/theme/_dark.less",
+    "adaptation": "保留官方brand-8作品牌，白字操作底使用brand-7/6/5；链接和选中文字用brand-9；可读辅助文字用font-white-2；功能文字用各色阶8。",
+    "tokens": {
+      "page": "#181818", "surface": "#242424", "surface-subtle": "#2c2c2c", "surface-hover": "#2c2c2c",
+      "text": "rgba(255, 255, 255, 0.90)", "text-secondary": "rgba(255, 255, 255, 0.55)", "text-disabled": "rgba(255, 255, 255, 0.22)",
+      "brand": "#4582e6", "action": "#2667d4", "action-hover": "#054bbe", "action-active": "#0d429a", "on-action": "#ffffff",
+      "action-disabled": "#393939", "link": "#699ef5", "selected": "#1b2f51", "on-selected": "#699ef5",
+      "border": "#393939", "control-border": "#8b8b8b", "focus": "#699ef5",
+      "info-text": "#699ef5", "info-bg": "#1b2f51", "success-text": "#80d2b6", "success-bg": "#193a2a", "warning-text": "#ecbf91", "warning-bg": "#4f2a1d", "error-text": "#ec888e", "error-bg": "#472324"
+    }
+  },
+  "weui-light": {
+    "source": "weui/weui@7a6f8ad7700d0d6f1361dbe5e2942b4b129e7a7e src/style/base/theme/vars/light.less",
+    "adaptation": "保留官方品牌绿、背景、FG-0/1与链接色。操作绿、焦点、成功/警告/错误文字及浅状态背景是经配对检查的本地适配值，不冒充WeUI官方token。已有WeUI组件不套用此基线。",
+    "tokens": {
+      "page": "#f7f7f7", "surface": "#ffffff", "surface-subtle": "#ededed", "surface-hover": "#ededed",
+      "text": "rgba(0, 0, 0, 0.90)", "text-secondary": "rgba(0, 0, 0, 0.55)", "text-disabled": "rgba(0, 0, 0, 0.30)",
+      "brand": "#07c160", "action": "#007d3d", "action-hover": "#006e35", "action-active": "#005f2e", "on-action": "#ffffff",
+      "action-disabled": "#ededed", "link": "#576b95", "selected": "#e8f5ec", "on-selected": "#006e35",
+      "border": "rgba(0, 0, 0, 0.10)", "control-border": "rgba(0, 0, 0, 0.45)", "focus": "#007d3d",
+      "info-text": "#576b95", "info-bg": "#f7f7f7", "success-text": "#006e35", "success-bg": "#e8f5ec", "warning-text": "#8a4b00", "warning-bg": "#fff3e4", "error-text": "#c62828", "error-bg": "#ffefef"
+    }
+  }
+}

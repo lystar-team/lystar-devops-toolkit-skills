@@ -16,7 +16,9 @@
 ./install-lystar-ui-design.sh --harness codex
 ```
 
-安装后由 Harness 按 Skill 名称 `lystar-ui-design` 加载，不增加 PATH 命令。核心方法、短设计记录、任务推演、平台适配、内容与视觉校准及评审说明随包安装；配套文件不再维护第二套核心规则或历史通过状态。国内参考保留十组、十五张本地原图，浏览入口为 `references/examples/index.html`。按当前设计问题选取相关说明与实际原图，不按“同为小程序”照搬品牌或运营页面，也不要求每次加载全部图片。
+安装后由 Harness 按 Skill 名称 `lystar-ui-design` 加载，不增加 PATH 命令。先选局部、已有系统、新建或评审路径，已有依据足够时直接实施并检查受影响范围；不默认搜图、生图或读取维护文档。
+
+配色优先项目 DESIGN.md、主题与组件 token，再按条件使用成熟系统。随包提供 `references/color-system.md`、三套本地语义配色基线以及零依赖 `scripts/color_tools.py`；它能导出参考 CSS 并检查真实 sRGB 颜色对、透明色合成及实际状态，不自动修改项目或安装新框架。现有主题优先，本地适配不冒充官方完整主题。核心方法、短设计记录、任务推演、平台适配及评审说明随包安装；配套文件不维护第二套核心规则。国内参考保留十组、十五张本地原图，浏览入口为 `references/examples/index.html`，只在当前任务缺少相关视觉依据时读取。
 
 ## 实际加载与验证
 

@@ -1,0 +1,23 @@
+{
+  "passes": false,
+  "pairs": [
+    {
+      "name": "给定亮品牌绿配14px白字",
+      "ratio": 2.3848,
+      "minimum": 4.5,
+      "passes": false
+    },
+    {
+      "name": "适配操作绿配14px白字",
+      "ratio": 5.2489,
+      "minimum": 4.5,
+      "passes": true
+    },
+    {
+      "name": "保留亮绿按钮底配深色前景",
+      "ratio": 8.8059,
+      "minimum": 4.5,
+      "passes": true
+    }
+  ]
+}

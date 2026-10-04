@@ -1,0 +1,29 @@
+{
+  "passes": false,
+  "pairs": [
+    {
+      "name": "WeUI品牌绿/白字",
+      "ratio": 2.3848,
+      "minimum": 4.5,
+      "passes": false
+    },
+    {
+      "name": "Ant默认蓝/白字",
+      "ratio": 4.1041,
+      "minimum": 4.5,
+      "passes": false
+    },
+    {
+      "name": "TDesign暗色brand-8/白字",
+      "ratio": 3.7576,
+      "minimum": 4.5,
+      "passes": false
+    },
+    {
+      "name": "40%黑字/白底",
+      "ratio": 2.849,
+      "minimum": 4.5,
+      "passes": false
+    }
+  ]
+}

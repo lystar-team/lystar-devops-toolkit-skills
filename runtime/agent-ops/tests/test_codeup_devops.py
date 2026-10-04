@@ -341,12 +341,60 @@ class CodeupDevopsTests(unittest.TestCase):
                     branch="develop",
                     pipeline_name=None,
                     per_page=30,
+                    save=True,
                 )
             )
         self.assertEqual(result["status"], "located")
         self.assertEqual(result["matches"][0]["pipeline_id"], "10")
         self.assertTrue(result["matches"][0]["has_deployment"])
         self.assertNotIn("flow", result["matches"][0])
+        self.assertEqual(result["mapping"]["pipeline_id"], "10")
+        self.assertEqual(
+            codeup_devops.resolve_pipeline_mapping(
+                organization,
+                "https://codeup.aliyun.com/org/repo.git",
+                "develop",
+            )["pipeline_id"],
+            "10",
+        )
+
+    def test_pipeline_registry_round_trip_is_centralized(self) -> None:
+        organization = {"key": "test", "name": "测试组织", "edition": "central", "organization_id": "org-1"}
+        mapping = codeup_devops.save_pipeline_mapping(
+            organization,
+            {
+                "pipeline_id": "10",
+                "pipeline_name": "API",
+                "pipeline_type": "PIPELINEASCODE",
+                "source": {"endpoint": "https://user:token@codeup.aliyun.com/org/repo.git", "branch": "develop"},
+                "has_deployment": True,
+                "yaml_sha256": "abc",
+            },
+        )
+        self.assertEqual(mapping["repo_url"], "https://codeup.aliyun.com/org/repo.git")
+        self.assertNotIn("token", mapping["repo_url"])
+        self.assertEqual(codeup_devops.load_config()["pipelines"][mapping["registry_key"]]["pipeline_id"], "10")
+        listed = codeup_devops.list_pipeline_registry(Namespace(org=None))
+        self.assertEqual(listed["status"], "ok")
+        self.assertEqual(listed["pipelines"][0]["pipeline_id"], "10")
+
+    def test_run_without_pipeline_id_requires_repo_and_branch(self) -> None:
+        codeup_devops.register_organization(
+            Namespace(
+                key="test",
+                name="测试组织",
+                edition="central",
+                organization_id="org-1",
+                api_base_url=None,
+                organization_alias=None,
+                default=True,
+            )
+        )
+        with self.assertRaisesRegex(codeup_devops.CodeupError, "--repo 和 --branch"):
+            codeup_devops.resolve_pipeline_id_for_run(
+                Namespace(pipeline_id=None, repo=None, branch=None),
+                codeup_devops.resolve_organization("test"),
+            )
 
 
 if __name__ == "__main__":

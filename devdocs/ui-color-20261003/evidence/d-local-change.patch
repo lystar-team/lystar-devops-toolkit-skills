@@ -1,0 +1,11 @@
+--- B/index.html
++++ D/index.html
+@@ -18,7 +18,7 @@
+       <label class="field-label" for="queryInput">查询记录</label>
+       <input id="queryInput" type="search" placeholder="输入设备或故障关键词" autocomplete="off" spellcheck="false">
+     </div>
+-    <button id="queryBtn" class="btn btn-primary" type="button">查询</button>
++    <button id="queryBtn" class="btn btn-primary" type="button">搜索</button>
+   </section>
+ 
+   <p class="filter-note" id="filterNote" hidden>

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设备报修受理</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="page">
+  <header class="page-head">
+    <h1>设备报修受理</h1>
+    <button id="themeToggle" class="btn btn-secondary" type="button">深色模式</button>
+  </header>
+
+  <section class="toolbar" aria-label="查询记录">
+    <div class="field">
+      <label class="field-label" for="queryInput">查询记录</label>
+      <input id="queryInput" type="search" placeholder="输入设备或故障关键词" autocomplete="off" spellcheck="false">
+    </div>
+    <button id="queryBtn" class="btn btn-primary" type="button">查询</button>
+  </section>
+
+  <p class="filter-note" id="filterNote" hidden>
+    <span id="filterNoteText"></span>
+    <button id="clearFilter" class="link-btn" type="button">清除筛选</button>
+  </p>
+
+  <ul class="record-list" id="recordList"></ul>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

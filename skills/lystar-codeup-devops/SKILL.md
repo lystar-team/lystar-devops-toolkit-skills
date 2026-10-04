@@ -32,6 +32,8 @@ codeupx auth show --json
 
 每次流水线操作都必须先解析组织。流水线 ID 不能单独决定组织。
 
+流水线映射统一保存在 `${LYSTAR_HOME:-$HOME/.lystar}/config/codeup-devops.toml` 的 `pipelines` 表中。映射键由组织 key、规范化 Codeup 仓库地址和分支组成，不保存在项目仓库或项目 `docs/` 中。项目文档可以记录历史发布结果，但不是流水线 ID 的事实源。
+
 中心版组织保存 `organization_id`；Region 版组织保存 `api_base_url`。用稳定的小写 ASCII key 作为 Agent 口令中的组织别名：
 
 ```bash
@@ -73,7 +75,42 @@ codeupx pipeline find --org <org-key> \
   --branch develop --json
 ```
 
-`pipeline find` 会读取流水线 YAML 的 `sources.*.endpoint`，标准化仓库地址后返回 `located`、`not_found` 或 `ambiguous`；不会根据流水线名称猜测，也不会修改流水线。
+`pipeline find` 会读取流水线 YAML 的 `sources.*.endpoint`，标准化仓库地址后返回 `located`、`not_found` 或 `ambiguous`；默认只读，不会根据流水线名称猜测，也不会修改流水线。需要把唯一结果登记到统一配置时显式加 `--save`。
+
+## 统一流水线映射
+
+首次接管或迁移项目时，先登记并校验映射：
+
+```bash
+codeupx pipeline register --org main \
+  --pipeline-id '<pipeline-id>' \
+  --repo-url 'https://codeup.aliyun.com/org/project/api.git' \
+  --branch develop --json
+```
+
+查看统一登记的映射：
+
+```bash
+codeupx pipeline registry --org main --json
+```
+
+也可以在首次按仓库查找时自动保存唯一结果：
+
+```bash
+codeupx pipeline find --org main \
+  --repo-url 'https://codeup.aliyun.com/org/project/api.git' \
+  --branch develop --save --json
+```
+
+运行已有项目时优先复用统一映射，省略流水线 ID：
+
+```bash
+codeupx pipeline run --org main \
+  --repo 'https://codeup.aliyun.com/org/project/api.git' \
+  --branch develop --watch --json
+```
+
+`pipeline run` 会先按组织、仓库和分支读取本地映射；只有没有登记时才执行一次 `pipeline find` 并保存唯一结果。映射失效时，使用 `pipeline register` 覆盖，或使用 `pipeline find --save` 重新登记。需要临时运行未登记流水线时，仍可直接提供 `--pipeline-id`。
 
 创建并自动运行：
 
@@ -120,12 +157,16 @@ codeupx pipeline run --org <org-key> --pipeline-id '<pipeline-id>' \
   --env KEY=VALUE --watch --json
 ```
 
+省略 `--pipeline-id` 时，必须提供 `--repo` 和 `--branch`，由统一流水线映射解析 ID。
+
 运行参数复杂时写 JSON 文件并使用 `--params-file`。已有流水线的 YAML、服务连接、主机组和变量组应优先复用，不要凭空生成内部 ID。
 
 ## 运行流程
 
 1. 解析组织并验证 CLI 上下文。
-2. 读取 YAML，确认代码源、服务连接、构建集群、制品和部署组件。
+2. 从统一流水线映射读取组织、仓库、分支和流水线 ID；已有映射时直接运行，不重复 `pipeline find`。
+3. 只有映射缺失时，才按仓库地址和分支查找；唯一匹配后写回统一配置。
+4. 读取 YAML，确认代码源、服务连接、构建集群、制品和部署组件。
 3. 对创建/更新动作先使用 `--dry-run` 或先读取现有流水线比对。
 4. 创建或更新后，若用户要求自动部署，必须继续调用 `--run-after`，不能只报告创建成功。
 5. 运行后使用 `--watch` 轮询；报告流水线 ID、运行 ID、最终状态和失败阶段。
@@ -148,6 +189,8 @@ codeupx pipeline run --org <org-key> --pipeline-id '<pipeline-id>' \
 
 - Agent 优先使用 `--json`。
 - `codeupx` 会把最后一次结果保存到 Lystar 的 session snapshot；不要自行把结果写到 Skill 目录。
+- 流水线映射必须保存在 `${LYSTAR_HOME:-$HOME/.lystar}/config/codeup-devops.toml`，由 `pipeline register`、`pipeline find --save` 或缺失映射时的 `pipeline run` 维护。
+- 发版完成后报告流水线 ID、运行 ID、提交号和最终状态；运行 ID用于追溯，不替代全局流水线映射。
 - 不要把组织 ID、流水线 ID 和服务连接 ID 混用。
 - 不要猜测 Codeup 代码组或代码库内部 ID；创建前先用 `repository list` 或官方 CLI 查询。
 - 不要把流水线名称当作唯一 ID；同名流水线必须结合组织和显式选择策略。

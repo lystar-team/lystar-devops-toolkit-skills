@@ -77,6 +77,7 @@ def default_config() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "default_organization": "",
         "organizations": {},
+        "pipelines": {},
         "credentials": {},
         "settings": {
             "poll_interval_seconds": DEFAULT_WATCH_INTERVAL,
@@ -90,13 +91,16 @@ def load_config() -> dict[str, Any]:
     if not raw:
         return default_config()
     document = default_config()
-    document.update({key: value for key, value in raw.items() if key != "organizations"})
+    document.update({key: value for key, value in raw.items() if key not in {"organizations", "pipelines"}})
     document["organizations"] = dict(raw.get("organizations", {}))
+    document["pipelines"] = dict(raw.get("pipelines", {}))
     document["credentials"] = dict(raw.get("credentials", {}))
     document["settings"] = dict(default_config()["settings"])
     document["settings"].update(dict(raw.get("settings", {})))
     if not isinstance(document["organizations"], dict):
         raise CodeupError("codeup-devops.toml 的 organizations 必须是表")
+    if not isinstance(document["pipelines"], dict):
+        raise CodeupError("codeup-devops.toml 的 pipelines 必须是表")
     if not isinstance(document["credentials"], dict):
         raise CodeupError("codeup-devops.toml 的 credentials 必须是表")
     return document
@@ -471,6 +475,79 @@ def normalize_pipeline(item: Any) -> dict[str, Any]:
     }
 
 
+def credential_free_repo_url(value: Any) -> str:
+    repository_key = normalize_repo_url(value)
+    return f"https://{repository_key}.git" if repository_key else ""
+
+
+def pipeline_registry_key(organization_key_value: Any, repo_url: Any, branch: Any) -> str:
+    organization_value = str(organization_key_value or "").strip()
+    repository_key = normalize_repo_url(repo_url)
+    branch_value = str(branch or "").strip()
+    if not organization_value or not repository_key or not branch_value:
+        raise CodeupError("流水线映射必须包含组织、仓库地址和分支")
+    return f"{organization_value}|{repository_key}|{branch_value}"
+
+
+def save_pipeline_mapping(
+    organization: dict[str, Any],
+    match: dict[str, Any],
+    *,
+    repo_url: str | None = None,
+    branch: str | None = None,
+) -> dict[str, Any]:
+    source = dict(match.get("source", {}))
+    source_url = repo_url or source.get("endpoint")
+    source_branch = branch or source.get("branch")
+    repository_key = normalize_repo_url(source_url)
+    branch_value = str(source_branch or "").strip()
+    pipeline_id = str(match.get("pipeline_id") or "").strip()
+    organization_key_value = str(organization.get("key") or "").strip()
+    if not pipeline_id:
+        raise CodeupError("流水线映射缺少 pipeline ID")
+    registry_key = pipeline_registry_key(organization_key_value, repository_key, branch_value)
+    mapping = {
+        "organization": organization_key_value,
+        "organization_id": str(organization.get("organization_id") or ""),
+        "repo_url": credential_free_repo_url(source_url),
+        "repository_key": repository_key,
+        "branch": branch_value,
+        "pipeline_id": pipeline_id,
+        "pipeline_name": str(match.get("pipeline_name") or ""),
+        "pipeline_type": str(match.get("pipeline_type") or ""),
+        "has_deployment": bool(match.get("has_deployment")),
+        "yaml_sha256": str(match.get("yaml_sha256") or ""),
+        "last_verified_at": utc_now(),
+    }
+    target = config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with lock_files(target):
+        config = load_config()
+        pipelines = dict(config.get("pipelines", {}))
+        pipelines[registry_key] = mapping
+        config["pipelines"] = pipelines
+        write_toml(target, config)
+    return {"registry_key": registry_key, **mapping}
+
+
+def resolve_pipeline_mapping(
+    organization: dict[str, Any],
+    repo_url: str,
+    branch: str,
+) -> dict[str, Any] | None:
+    registry_key = pipeline_registry_key(organization.get("key"), repo_url, branch)
+    raw = load_config().get("pipelines", {}).get(registry_key)
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise CodeupError(f"流水线映射格式错误：{registry_key}")
+    mapping = dict(raw)
+    if not str(mapping.get("pipeline_id") or "").strip():
+        raise CodeupError(f"流水线映射缺少 pipeline ID：{registry_key}")
+    mapping["registry_key"] = registry_key
+    return mapping
+
+
 def normalize_repo_url(value: Any) -> str:
     """Return a credential-free, scheme-independent Codeup repository key."""
 
@@ -635,6 +712,73 @@ def get_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         os.chmod(target, 0o600)
         result["yaml_path"] = str(target)
     return result
+
+
+def register_pipeline_mapping(args: argparse.Namespace) -> dict[str, Any]:
+    organization = resolve_organization(args.org)
+    detail = get_pipeline(
+        argparse.Namespace(
+            org=args.org,
+            organization=organization,
+            pipeline_id=args.pipeline_id,
+            yaml_out=None,
+        )
+    )
+    pipeline = detail["pipeline"]
+    yaml_text = extract_yaml(pipeline)
+    target = normalize_repo_url(args.repo_url)
+    matches = [
+        {
+            "organization": organization,
+            "pipeline_id": str(args.pipeline_id),
+            "pipeline_name": pipeline.get("name") or "",
+            "source": source,
+            "branch_match": source.get("branch") == args.branch,
+            "has_deployment": pipeline_has_deployment(yaml_text),
+            "yaml_sha256": hashlib.sha256(yaml_text.encode("utf-8")).hexdigest(),
+            "pipeline_type": pipeline.get("type", ""),
+        }
+        for source in pipeline_sources(yaml_text)
+        if source["repository_key"] == target and source.get("branch") == args.branch
+    ]
+    if len(matches) != 1:
+        raise CodeupError(
+            "流水线代码源与登记的仓库/分支不唯一匹配",
+            {"pipeline_id": str(args.pipeline_id), "repo_url": args.repo_url, "branch": args.branch, "matches": matches},
+        )
+    mapping = save_pipeline_mapping(organization, matches[0], repo_url=args.repo_url, branch=args.branch)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "codeup.pipeline.register",
+        "status": "registered",
+        "connection_status": "ok",
+        "organization": organization,
+        "mapping": mapping,
+    }
+
+
+def list_pipeline_registry(args: argparse.Namespace) -> dict[str, Any]:
+    organization_key_value = ""
+    organization = None
+    if getattr(args, "org", None):
+        organization = resolve_organization(args.org)
+        organization_key_value = str(organization.get("key") or "")
+    entries = []
+    for registry_key, raw in sorted(load_config().get("pipelines", {}).items()):
+        if not isinstance(raw, dict):
+            continue
+        if organization_key_value and str(raw.get("organization") or "") != organization_key_value:
+            continue
+        entries.append({"registry_key": registry_key, **dict(raw)})
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "codeup.pipeline.registry",
+        "status": "ok",
+        "connection_status": "configured",
+        "config_path": str(config_path()),
+        "organization": organization,
+        "pipelines": entries,
+    }
 
 
 def normalize_repository(item: Any) -> dict[str, Any]:
@@ -1107,7 +1251,7 @@ def find_pipelines(args: argparse.Namespace) -> dict[str, Any]:
     status = "located" if len(exact_branch) == 1 else "ambiguous" if len(exact_branch) > 1 else "not_found"
     if not exact_branch and len(matches) == 1 and not args.branch:
         status = "located"
-    return {
+    result = {
         "schema_version": SCHEMA_VERSION,
         "kind": "codeup.pipeline.find",
         "status": status,
@@ -1118,6 +1262,14 @@ def find_pipelines(args: argparse.Namespace) -> dict[str, Any]:
         "searched_organizations": searched,
         "matches": matches,
     }
+    if getattr(args, "save", False) and status == "located":
+        result["mapping"] = save_pipeline_mapping(
+            exact_branch[0]["organization"],
+            exact_branch[0],
+            repo_url=args.repo_url,
+            branch=args.branch or exact_branch[0]["source"].get("branch"),
+        )
+    return result
 
 
 def read_yaml(path: str) -> str:
@@ -1406,8 +1558,43 @@ def watch_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         time.sleep(max(0.1, args.interval))
 
 
+def resolve_pipeline_id_for_run(
+    args: argparse.Namespace,
+    organization: dict[str, Any],
+) -> tuple[str, dict[str, Any] | None]:
+    explicit_pipeline_id = str(getattr(args, "pipeline_id", "") or "").strip()
+    if explicit_pipeline_id:
+        return explicit_pipeline_id, None
+    repo_url = str(getattr(args, "repo", "") or "").strip()
+    branch = str(getattr(args, "branch", "") or "").strip()
+    if not repo_url or not branch:
+        raise CodeupError("省略 --pipeline-id 时必须同时提供 --repo 和 --branch")
+    mapping = resolve_pipeline_mapping(organization, repo_url, branch)
+    if mapping is not None:
+        return str(mapping["pipeline_id"]), mapping
+    found = find_pipelines(
+        argparse.Namespace(
+            org=organization["key"],
+            repo_url=repo_url,
+            branch=branch,
+            pipeline_name=None,
+            per_page=DEFAULT_PAGE_SIZE,
+            save=True,
+        )
+    )
+    mapping = found.get("mapping")
+    if found.get("status") != "located" or not isinstance(mapping, dict):
+        raise CodeupError(
+            "未找到唯一流水线，无法登记后运行",
+            {"repo_url": repo_url, "branch": branch, "find": found},
+        )
+    return str(mapping["pipeline_id"]), mapping
+
+
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     organization = resolve_organization(args.org)
+    pipeline_id, mapping = resolve_pipeline_id_for_run(args, organization)
+    args.pipeline_id = pipeline_id
     params = parse_params(args)
     try:
         previous = cli_call(
@@ -1460,6 +1647,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "params": params,
         "run": data,
     }
+    if mapping is not None:
+        result["pipeline_mapping"] = mapping
     if latest is not None:
         result["latest_run_lookup"] = latest
     if args.watch and not args.dry_run:
@@ -1548,6 +1737,7 @@ def request_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         "visibility",
         "confirm",
         "repo_url",
+        "repo",
         "branch",
         "name",
         "yaml",
@@ -1560,6 +1750,7 @@ def request_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         "page",
         "per_page",
         "all",
+        "save",
     )
     return {key: getattr(args, key) for key in allowed if hasattr(args, key) and getattr(args, key) not in (None, False, "")}
 
@@ -1677,6 +1868,11 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_parser = subparsers.add_parser("pipeline", help="管理云效流水线")
     pipeline_sub = pipeline_parser.add_subparsers(dest="pipeline_command", required=True)
 
+    pipeline_registry = pipeline_sub.add_parser("registry", help="查看本地统一流水线映射")
+    add_org_arg(pipeline_registry)
+    add_output_args(pipeline_registry)
+    pipeline_registry.set_defaults(func=list_pipeline_registry)
+
     pipeline_list = pipeline_sub.add_parser("list", help="列出流水线")
     add_org_arg(pipeline_list, required=True)
     pipeline_list.add_argument("--pipeline-name")
@@ -1703,10 +1899,18 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_find.add_argument("--repo-url", required=True)
     pipeline_find.add_argument("--branch")
     pipeline_find.add_argument("--pipeline-name")
-    pipeline_find.add_argument("--per-page", type=int, default=DEFAULT_PAGE_SIZE)
+    pipeline_find.add_argument("--save", action="store_true", help="唯一匹配时登记到统一本地配置")
     add_org_arg(pipeline_find)
     add_output_args(pipeline_find)
     pipeline_find.set_defaults(func=find_pipelines)
+
+    pipeline_register = pipeline_sub.add_parser("register", help="校验并登记流水线映射")
+    add_org_arg(pipeline_register, required=True)
+    pipeline_register.add_argument("--pipeline-id", required=True)
+    pipeline_register.add_argument("--repo-url", required=True)
+    pipeline_register.add_argument("--branch", required=True)
+    add_output_args(pipeline_register)
+    pipeline_register.set_defaults(func=register_pipeline_mapping)
 
     pipeline_create = pipeline_sub.add_parser("create", help="创建 YAML 流水线")
     add_org_arg(pipeline_create, required=True)
@@ -1742,7 +1946,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pipeline_run = pipeline_sub.add_parser("run", help="运行流水线")
     add_org_arg(pipeline_run, required=True)
-    pipeline_run.add_argument("--pipeline-id", required=True)
+    pipeline_run.add_argument("--pipeline-id", help="已有流水线 ID；省略时按 --repo 和 --branch 查统一配置")
     add_run_args(pipeline_run)
     add_output_args(pipeline_run)
     pipeline_run.set_defaults(func=run_pipeline)

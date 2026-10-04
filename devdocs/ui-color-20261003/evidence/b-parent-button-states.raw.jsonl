@@ -1,0 +1,6 @@
+"{\"name\":\"dark/default\",\"foreground\":\"rgb(255, 255, 255)\",\"background\":\"rgb(38, 103, 212)\",\"active\":false,\"hover\":false}"
+"{\"name\":\"dark/hover\",\"foreground\":\"rgb(255, 255, 255)\",\"background\":\"rgb(5, 75, 190)\",\"active\":false,\"hover\":true}"
+"{\"name\":\"dark/active\",\"foreground\":\"rgb(255, 255, 255)\",\"background\":\"rgb(13, 66, 154)\",\"active\":true,\"hover\":true}"
+"{\"name\":\"light/default\",\"foreground\":\"rgb(255, 255, 255)\",\"background\":\"rgb(0, 82, 217)\",\"active\":false,\"hover\":false}"
+"{\"name\":\"light/hover\",\"foreground\":\"rgb(255, 255, 255)\",\"background\":\"rgb(0, 60, 171)\",\"active\":false,\"hover\":true}"
+"{\"name\":\"light/active\",\"foreground\":\"rgb(255, 255, 255)\",\"background\":\"rgb(0, 42, 124)\",\"active\":true,\"hover\":true}"

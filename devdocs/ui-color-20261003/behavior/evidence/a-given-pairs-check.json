@@ -1,0 +1,17 @@
+{
+  "passes": true,
+  "pairs": [
+    {
+      "name": "主按钮 #722ed1 底 + 白字",
+      "ratio": 6.9376,
+      "minimum": 4.5,
+      "passes": true
+    },
+    {
+      "name": "主按钮 hover #531dab 底 + 白字",
+      "ratio": 9.8518,
+      "minimum": 4.5,
+      "passes": true
+    }
+  ]
+}

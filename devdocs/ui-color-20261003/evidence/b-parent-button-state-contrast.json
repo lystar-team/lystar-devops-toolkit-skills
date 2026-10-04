@@ -1,0 +1,41 @@
+{
+  "passes": true,
+  "pairs": [
+    {
+      "name": "dark/default",
+      "ratio": 5.2854,
+      "minimum": 4.5,
+      "passes": true
+    },
+    {
+      "name": "dark/hover",
+      "ratio": 7.6186,
+      "minimum": 4.5,
+      "passes": true
+    },
+    {
+      "name": "dark/active",
+      "ratio": 9.2796,
+      "minimum": 4.5,
+      "passes": true
+    },
+    {
+      "name": "light/default",
+      "ratio": 6.5444,
+      "minimum": 4.5,
+      "passes": true
+    },
+    {
+      "name": "light/hover",
+      "ratio": 9.3985,
+      "minimum": 4.5,
+      "passes": true
+    },
+    {
+      "name": "light/active",
+      "ratio": 12.9451,
+      "minimum": 4.5,
+      "passes": true
+    }
+  ]
+}

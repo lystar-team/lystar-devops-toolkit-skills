@@ -1,0 +1,72 @@
+[
+  {
+    "name": "设备报修受理",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(24, 24, 24)"
+  },
+  {
+    "name": "浅色模式",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(44, 44, 44)"
+  },
+  {
+    "name": "查询记录",
+    "foreground": "rgba(255, 255, 255, 0.55)",
+    "background": "rgb(24, 24, 24)"
+  },
+  {
+    "name": "queryInput",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "查询",
+    "foreground": "rgb(255, 255, 255)",
+    "background": "rgb(38, 103, 212)"
+  },
+  {
+    "name": "空调无法制冷",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "待受理",
+    "foreground": "rgb(236, 191, 145)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "查看记录",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "门禁刷卡无响应",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "处理中",
+    "foreground": "rgb(105, 158, 245)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "查看记录",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "办公室照明不亮",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "已完成",
+    "foreground": "rgb(128, 210, 182)",
+    "background": "rgb(36, 36, 36)"
+  },
+  {
+    "name": "查看记录",
+    "foreground": "rgba(255, 255, 255, 0.9)",
+    "background": "rgb(36, 36, 36)"
+  }
+]

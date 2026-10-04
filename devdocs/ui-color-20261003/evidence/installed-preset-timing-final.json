@@ -1,0 +1,50 @@
+{
+  "td-light": {
+    "elapsed_ms": [
+      64.41216310486197,
+      54.85214293003082,
+      55.55905308574438
+    ],
+    "median_ms": 55.55905308574438,
+    "pair_count": 44,
+    "minimum_text_ratio": 5.4401,
+    "minimum_control_ratio": 3.8597,
+    "action_ratios": {
+      "on-action": 6.5444,
+      "on-action-hover": 9.3985,
+      "on-action-active": 12.9451
+    }
+  },
+  "td-dark": {
+    "elapsed_ms": [
+      50.128504168242216,
+      53.30451112240553,
+      49.40901976078749
+    ],
+    "median_ms": 50.128504168242216,
+    "pair_count": 44,
+    "minimum_text_ratio": 4.9681,
+    "minimum_control_ratio": 4.0989,
+    "action_ratios": {
+      "on-action": 5.2854,
+      "on-action-hover": 7.6186,
+      "on-action-active": 9.2796
+    }
+  },
+  "weui-light": {
+    "elapsed_ms": [
+      54.03640866279602,
+      58.59778495505452,
+      53.65419574081898
+    ],
+    "median_ms": 54.03640866279602,
+    "pair_count": 44,
+    "minimum_text_ratio": 4.55,
+    "minimum_control_ratio": 3.2669,
+    "action_ratios": {
+      "on-action": 5.2489,
+      "on-action-hover": 6.399,
+      "on-action-active": 7.8466
+    }
+  }
+}
